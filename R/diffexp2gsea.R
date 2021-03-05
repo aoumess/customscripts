@@ -143,7 +143,8 @@ gsea.run <- function(geneList = NULL, func.name = 'clusterProfiler::GSEA', speci
     ## MeSH (requires additional 'MeSHDb', 'database' and 'category' parameters)
     mesh.sp <- paste0(c('MeSH.', substr(unlist(strsplit(species, ' ')), c(1, 1), c(1,2)), '.eg.db'), collapse = '')
     gsea.res <- gse.function(geneList = geneList, MeSHDb = mesh.sp, pvalueCutoff = pvalueCutoff, minGSSize = minGSSize, seed = seed, ...)
-    gsea.res@setType <- paste(c(func.name, database, category), collapse = '_')
+    # args.all <- as.list(match.call(expand.dots = FALSE))
+    gsea.res@setType <- func.name
   } else {
     if ('kegg' %in% tolower(func.name)) {
       ## KEGG / KEGGM (requires a custom species name in 'organism' parameter)
@@ -322,7 +323,7 @@ ora.run <- function(gene = NULL, func.name = 'clusterProfiler::enricher', specie
     ## MeSH (requires additional 'MeSHDb', 'database' and 'category' parameters)
     mesh.sp <- paste0(c('MeSH.', substr(unlist(strsplit(species, ' ')), c(1, 1), c(1,2)), '.eg.db'), collapse = '')
     ora.res <- clusterProfiler::enricher(gene = gene, MeSHDb = mesh.sp, pvalueCutoff = pvalueCutoff, minGSSize = minGSSize, universe = AnnotationDbi::mappedkeys(eval(parse(text = paste0(msigdbr2org(species), 'ACCNUM')))), ...)
-    ora.res@ontology <- paste(c(func.name, database, category), collapse = '_')
+    ora.res@ontology <- func.name
   } else {
     if ('kegg' %in% tolower(func.name)) {
       ## KEGG / KEGGM (requires a custom species name in 'organism' parameter)
@@ -526,9 +527,11 @@ mesh.dbs <- c('gendoo', 'gene2pubmed', 'RBBH')
 mesh.categories <- toupper(letters[-c(15:21,23:25)])
 
 ### GSEA
-for (i in mesh.dbs) {
+for (y in mesh.dbs) {
   for (x in mesh.categories) {
     my.gsea.res <- gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = mesh.func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes, database = y, category = x)
+    ## Little hack specific to MeSH results (as I was not able to get the value of extra parameters 'database' and 'category' from within the 'gsea.run()' function)
+    my.gsea.res@setType <- paste(c(mesh.func.name, y, x), collapse = '_')
     gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name)
   }
 }
@@ -537,6 +540,8 @@ for (i in mesh.dbs) {
 for (i in mesh.dbs) {
   for (x in mesh.categories) {
     my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, species = species, func.name = mesh.func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes, database = y, category = x)
+    ## Little hack specific to MeSH results (as I was not able to get the value of extra parameters 'database' and 'category' from within the 'gsea.run()' function)
+    my.ora.res@ontology <- paste(c(mesh.func.name, database, category), collapse = '_')
     ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, geneList = enr.inputs$gsea.genevec)
   }
 }
