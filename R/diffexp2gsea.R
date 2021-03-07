@@ -142,9 +142,9 @@ gsea.run <- function(geneList = NULL, func.name = 'clusterProfiler::GSEA', speci
   } else if (func.name == 'meshes::gseMeSH') {
     ## MeSH (requires additional 'MeSHDb', 'database' and 'category' parameters)
     mesh.sp <- paste0(c('MeSH.', substr(unlist(strsplit(species, ' ')), c(1, 1), c(1,2)), '.eg.db'), collapse = '')
-    gsea.res <- gse.function(geneList = geneList, MeSHDb = mesh.sp, pvalueCutoff = pvalueCutoff, minGSSize = minGSSize, seed = seed, ...)
-    # args.all <- as.list(match.call(expand.dots = FALSE))
-    gsea.res@setType <- func.name
+    gsea.res <- try(gse.function(geneList = geneList, MeSHDb = mesh.sp, pvalueCutoff = pvalueCutoff, minGSSize = minGSSize, seed = seed, ...), silent = TRUE)
+    gc()
+    if (is(gsea.res, class2 = 'try-error')) return(ora.res)
   } else {
     if ('kegg' %in% tolower(func.name)) {
       ## KEGG / KEGGM (requires a custom species name in 'organism' parameter)
@@ -154,11 +154,11 @@ gsea.run <- function(geneList = NULL, func.name = 'clusterProfiler::GSEA', speci
       ## OTHER (generic functions without TERM2GENE or custom parameters, like those in DOSE package)
       gsea.res <- gse.function(geneList = geneList, pvalueCutoff = pvalueCutoff, minGSSize = minGSSize, seed = seed, ...)
     }
-    gsea.res@setType <- func.name
   }
 
   ## Adding some useful metadata
   gsea.res@organism <- species
+  gsea.res@setType <- func.name
   if(!is.null(gene2Symbol)) {
     gsea.res@gene2Symbol <- gene2Symbol
     gsea.res@keytype <- 'ENTREZID'
@@ -199,7 +199,9 @@ gsea.output <- function(gseaResult = NULL, comp.name = 'TEST', out.dir = getwd()
     ## Heatplot (needs readable)
     if (!is.null(heatplot)) {
       hp <- enrichplot::heatplot(gseaResult_readable, showCategory = heatplot, foldChange = gseaResult@geneList)
-      png(paste0(gsea.dir, '/GSEA.heatplot.png'), width = (5 * nrow(hp$data)) + 500, height = (min(length(which(gsea.sig.tf)), heatplot) * 12) + 150)
+      # message(nrow(hp$data))
+      # message((min(length(which(gsea.sig.tf)), heatplot) * 12) + 150)
+      png(paste0(gsea.dir, '/GSEA.heatplot.png'), width = min(5000, (5 * nrow(hp$data)) + 500), height = (min(length(which(gsea.sig.tf)), heatplot) * 12) + 150)
       print(hp)
       dev.off()
     }
@@ -317,13 +319,13 @@ ora.run <- function(gene = NULL, func.name = 'clusterProfiler::enricher', specie
     if (is.null(t2g)) stop("When calling this function with func.name = 'clusterProfiler::enricher', a value is required for 't2g'")
     if (is.null(t2g.name)) stop("When calling this function with func.name = 'clusterProfiler::enricher', a value is required for 't2g.name'")
     ## Functions requiring a TERM2GENE (msigdbr, CellMarkers, ...)
-    ora.res <- clusterProfiler::enricher(gene = gene, TERM2GENE = t2g, pvalueCutoff = pvalueCutoff, minGSSize = minGSSize, universe = AnnotationDbi::mappedkeys(eval(parse(text = paste0(msigdbr2org(species), 'ACCNUM')))), ...)
-    ora.res@ontology <- paste(c(func.name, t2g.name), collapse = '_')
-  } else if (func.name == 'meshes::gseMeSH') {
+    ora.res <- or.function(gene = gene, TERM2GENE = t2g, pvalueCutoff = pvalueCutoff, minGSSize = minGSSize, universe = AnnotationDbi::mappedkeys(eval(parse(text = paste0(msigdbr2org(species), 'ACCNUM')))), ...)
+    func.name <- paste(c(func.name, t2g.name), collapse = '_')
+  } else if (func.name == 'meshes::enrichMeSH') {
     ## MeSH (requires additional 'MeSHDb', 'database' and 'category' parameters)
     mesh.sp <- paste0(c('MeSH.', substr(unlist(strsplit(species, ' ')), c(1, 1), c(1,2)), '.eg.db'), collapse = '')
-    ora.res <- clusterProfiler::enricher(gene = gene, MeSHDb = mesh.sp, pvalueCutoff = pvalueCutoff, minGSSize = minGSSize, universe = AnnotationDbi::mappedkeys(eval(parse(text = paste0(msigdbr2org(species), 'ACCNUM')))), ...)
-    ora.res@ontology <- func.name
+    ora.res <- try(or.function(gene = gene, MeSHDb = mesh.sp, pvalueCutoff = pvalueCutoff, minGSSize = minGSSize, universe = AnnotationDbi::mappedkeys(eval(parse(text = paste0(msigdbr2org(species), 'ACCNUM')))), ...), silent = TRUE)
+    if (is(ora.res, class2 = 'try-error')) return(ora.res)
   } else {
     if ('kegg' %in% tolower(func.name)) {
       ## KEGG / KEGGM (requires a custom species name in 'organism' parameter)
@@ -333,10 +335,11 @@ ora.run <- function(gene = NULL, func.name = 'clusterProfiler::enricher', specie
       ## OTHER (generic functions without TERM2GENE or custom parameters, like those in DOSE package)
       ora.res <- or.function(gene = gene, pvalueCutoff = pvalueCutoff, minGSSize = minGSSize, universe = AnnotationDbi::mappedkeys(eval(parse(text = paste0(msigdbr2org(species), 'ACCNUM')))), ...)
     }
-    ora.res@ontology <- func.name
   }
-
+  gc()
+  
   ## Adding some useful metadata
+  ora.res@ontology <- func.name
   ora.res@organism <- species
   if(!is.null(gene2Symbol)) {
     ora.res@gene2Symbol <- gene2Symbol
@@ -370,7 +373,7 @@ ora.output <- function(enrichResult = NULL, comp.name = 'TEST', out.dir = getwd(
     saveRDS(enrichResult, file = paste0(ora.dir, '/ORA.results.RDS'), compress = 'bzip2')
     
     ## Converting to readable symbols
-    enrichResult_readable <- DOSE::setReadable(enrichResult, OrgDb = paste0(msigdbr2org(gseaResult@organism), '.db'))
+    enrichResult_readable <- DOSE::setReadable(enrichResult, OrgDb = paste0(msigdbr2org(enrichResult@organism), '.db'))
     
     ## Writing readable table
     write.table(enrichResult_readable@result, file = paste0(ora.dir, '/ORA.results_readable.txt'), quote = FALSE, sep = "\t", row.names = FALSE)
@@ -378,7 +381,7 @@ ora.output <- function(enrichResult = NULL, comp.name = 'TEST', out.dir = getwd(
     ## Heatplot (needs readable)
     if (!is.null(heatplot) & !is.null(geneList)) {
       hp <- enrichplot::heatplot(enrichResult_readable, showCategory = heatplot, foldChange = geneList)
-      png(paste0(ora.dir, '/ORA.heatplot.png'), width = (5 * nrow(hp$data)) + 500, height = (min(length(which(ora.sig.tf)), heatplot) * 12) + 150)
+      png(paste0(ora.dir, '/ORA.heatplot.png'), width = min(5000, (5 * nrow(hp$data)) + 500), height = (min(length(which(ora.sig.tf)), heatplot) * 12) + 150)
       print(hp)
       dev.off()
     }
@@ -467,7 +470,7 @@ for (x in seq_len(nrow(msigdb.collections))) {
   my.t2g <- msigdb_to_t2g(species = species, category = my.collec[1], subcategory = my.collec[2])
   my.t2g.name <- unname(if(my.collec[2] == '') my.collec[1] else paste(my.collec, collapse = "_"))
   ## Run the GSEA
-  my.gsea.res <- gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = 'clusterProfiler::GSEA', t2g = my.t2g, t2g.name = my.t2g.name, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, nPerm = nPerm, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
+  my.gsea.res <- gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = 'clusterProfiler::GSEA', t2g = my.t2g, t2g.name = my.t2g.name, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
   ## Generate plots / outputs
   gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name)
 }
@@ -516,35 +519,6 @@ for (x in c('clusterProfiler::enrichKEGG', 'clusterProfiler::enrichMKEGG')) {
   ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, geneList = enr.inputs$gsea.genevec)
 }
 
-## MESH (WARNING : VERY VERY SLOW as big DBs, 3 sources, 16 categories !)
-### Requires additional parameters :
-### . 'MeSHDb' : character ; name of a MeSH [NO : AUTO FROM SPECIES NAME]
-### . 'database' : character ; MeSH source type (can be 'gendoo' = text-mining, 'gene2pubmed' = manual curation by NCBI team, 'RBBH' = sequence homology with BLASTP search @ E-value < 1E-50)
-### . 'category' : character ; name of a MeSH category sub-db.
-### NOTE : see https://yulab-smu.top/biomedical-knowledge-mining-book/meshes-semantic-similarity.html
-mesh.func.name <- 'meshes::gseMeSH'
-mesh.dbs <- c('gendoo', 'gene2pubmed', 'RBBH')
-mesh.categories <- toupper(letters[-c(15:21,23:25)])
-
-### GSEA
-for (y in mesh.dbs) {
-  for (x in mesh.categories) {
-    my.gsea.res <- gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = mesh.func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes, database = y, category = x)
-    ## Little hack specific to MeSH results (as I was not able to get the value of extra parameters 'database' and 'category' from within the 'gsea.run()' function)
-    my.gsea.res@setType <- paste(c(mesh.func.name, y, x), collapse = '_')
-    gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name)
-  }
-}
-
-### ORA
-for (i in mesh.dbs) {
-  for (x in mesh.categories) {
-    my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, species = species, func.name = mesh.func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes, database = y, category = x)
-    ## Little hack specific to MeSH results (as I was not able to get the value of extra parameters 'database' and 'category' from within the 'gsea.run()' function)
-    my.ora.res@ontology <- paste(c(mesh.func.name, database, category), collapse = '_')
-    ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, geneList = enr.inputs$gsea.genevec)
-  }
-}
 
 ## CELLMARKERS
 ### Assess cell types from an online table
@@ -563,7 +537,42 @@ my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, species = species, func.nam
 ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, geneList = enr.inputs$gsea.genevec)
 
 
+## MESH (WARNING : MEMORY OGRE AND SLOW !! Big DBs, 3 sources, 16 categories ! 64 GB of RAM required for most bases !
+### Requires additional parameters :
+### . 'MeSHDb' : character ; name of a MeSH [NO : AUTO FROM SPECIES NAME]
+### . 'database' : character ; MeSH source type (can be 'gendoo' = text-mining, 'gene2pubmed' = manual curation by NCBI team, 'RBBH' = sequence homology with BLASTP search @ E-value < 1E-50)
+### . 'category' : character ; name of a MeSH category sub-db.
+### NOTE : see https://yulab-smu.top/biomedical-knowledge-mining-book/meshes-semantic-similarity.html
+mesh.dbs <- c('gendoo', 'gene2pubmed') ## Did not seem to work with the 'RBBH' db.
+mesh.categories <- toupper(letters[-c(15:21,23:25)]) ## More categories are available, but some do not seem to work.
 
+### GSEA
+#### WARNING !! Needs toot much memory for a laptop (probably over 64 GB of RAM, easily...)
+mesh.func.name <- 'meshes::gseMeSH'
+for (y in mesh.dbs) {
+  for (x in mesh.categories) {
+    my.gsea.res <- try(gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = mesh.func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes, database = y, category = x), silent = TRUE)
+    if (!is(my.gsea.res, class2 = 'try-error')) {
+      ## Little hack specific to MeSH results (as I was not able to get the value of extra parameters 'database' and 'category' from within the 'gsea.run()' function)
+      my.gsea.res@setType <- paste(c(mesh.func.name, y, x), collapse = '_')
+      gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name)
+    }
+  }
+}
+
+### ORA
+mesh.func.name <- 'meshes::enrichMeSH'
+for (y in mesh.dbs) {
+  for (x in mesh.categories) {
+    message(paste0(y, ' ', x))
+    my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, species = species, func.name = mesh.func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes, database = y, category = x)
+    if(!is(my.ora.res, class2 = 'try-error')) {
+      ## Little hack specific to MeSH results (as I was not able to get the value of extra parameters 'database' and 'category' from within the 'gsea.run()' function)
+      my.ora.res@ontology <- paste(c(mesh.func.name, y, x), collapse = '_')
+      ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, geneList = enr.inputs$gsea.genevec)
+    }
+  }
+}
 
 ##################
 #### TESTZONE ####
