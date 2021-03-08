@@ -541,36 +541,50 @@ ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, 
 ### Requires additional parameters :
 ### . 'MeSHDb' : character ; name of a MeSH [NO : AUTO FROM SPECIES NAME]
 ### . 'database' : character ; MeSH source type (can be 'gendoo' = text-mining, 'gene2pubmed' = manual curation by NCBI team, 'RBBH' = sequence homology with BLASTP search @ E-value < 1E-50)
-### . 'category' : character ; name of a MeSH category sub-db.
+### . 'category' : character ; name of a MeSH category sub-db (namely 'A', 'B', 'C', 'D', 'G').
 ### NOTE : see https://yulab-smu.top/biomedical-knowledge-mining-book/meshes-semantic-similarity.html
-mesh.dbs <- c('gendoo', 'gene2pubmed') ## Did not seem to work with the 'RBBH' db.
-mesh.categories <- toupper(letters[-c(15:21,23:25)]) ## More categories are available, but some do not seem to work.
+
+### List of requested MeSH DBs
+mesh.dbs <- c('gendoo', 'gene2pubmed', 'RBBH') ## 'RBBH' is not available for Homo sapiens.
+### List of requested MeSH categories
+mesh.categories <- toupper(letters[-c(15:21,23:25)]) ## More categories are available, but some do not seem to work with Homo sapiens for some of the DBs.
+### Building the MeSH package name corresponding to the current species
+mesh.sp <- paste0(c('MeSH.', substr(unlist(strsplit(species, ' ')), c(1, 1), c(1,2)), '.eg.db'), collapse = '')
+### Checking which MeSH DBs are available for the current species.
+mesh.dbs <- MeSHDbi::listDatabases(eval(parse(text = paste0(mesh.sp, '::', mesh.sp))))[,1]
+
 
 ### GSEA
-#### WARNING !! Needs toot much memory for a laptop (probably over 64 GB of RAM, easily...)
+#### WARNING !! Needs too much memory for a laptop (probably over 64 GB of RAM, easily...)
 mesh.func.name <- 'meshes::gseMeSH'
 for (y in mesh.dbs) {
   for (x in mesh.categories) {
-    my.gsea.res <- try(gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = mesh.func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes, database = y, category = x), silent = TRUE)
-    if (!is(my.gsea.res, class2 = 'try-error')) {
-      ## Little hack specific to MeSH results (as I was not able to get the value of extra parameters 'database' and 'category' from within the 'gsea.run()' function)
-      my.gsea.res@setType <- paste(c(mesh.func.name, y, x), collapse = '_')
-      gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name)
-    }
+    message(paste0(y, ' ', x))
+    if (y %in% mesh.dbs) {
+      my.gsea.res <- try(gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = mesh.func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes, database = y, category = x), silent = TRUE)
+      if (!is(my.gsea.res, class2 = 'try-error')) {
+        ## Little hack specific to MeSH results (as I was not able to get the value of extra parameters 'database' and 'category' from within the 'gsea.run()' function)
+        my.gsea.res@setType <- paste(c(mesh.func.name, y, x), collapse = '_')
+        gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name)
+      }
+    } else message(paste0("Unsupported MeSH database '", y, "'. Expecting one of : '", paste(mesh.dbs, collapse = "', '"), "'."))
   }
 }
 
 ### ORA
+#### WARNING !! the 'gene2pubmed' requires a lot of RAM (~12 GB) !!
 mesh.func.name <- 'meshes::enrichMeSH'
 for (y in mesh.dbs) {
   for (x in mesh.categories) {
     message(paste0(y, ' ', x))
-    my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, species = species, func.name = mesh.func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes, database = y, category = x)
-    if(!is(my.ora.res, class2 = 'try-error')) {
-      ## Little hack specific to MeSH results (as I was not able to get the value of extra parameters 'database' and 'category' from within the 'gsea.run()' function)
-      my.ora.res@ontology <- paste(c(mesh.func.name, y, x), collapse = '_')
-      ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, geneList = enr.inputs$gsea.genevec)
-    }
+    if (y %in% mesh.dbs) {
+      my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, species = species, func.name = mesh.func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes, database = y, category = x)
+      if(!is(my.ora.res, class2 = 'try-error')) {
+        ## Little hack specific to MeSH results (as I was not able to get the value of extra parameters 'database' and 'category' from within the 'gsea.run()' function)
+        my.ora.res@ontology <- paste(c(mesh.func.name, y, x), collapse = '_')
+        ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, geneList = enr.inputs$gsea.genevec)
+      }
+    } else message(paste0("Unsupported MeSH database '", y, "'. Expecting one of : '", paste(mesh.dbs, collapse = "', '"), "'."))
   }
 }
 
