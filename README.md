@@ -2,7 +2,9 @@
 
 A dirty repo with my custom scripts for any project.
 
-## GR_rnaseq_pipe_launcher.sh
+## BASH
+
+### GR_rnaseq_pipe_launcher.sh
 
 A bash script to perform a RNAseq analysis on flamingo, using the pipelines from Thibault DAYRIS :
 
@@ -15,6 +17,13 @@ A bash script to perform a RNAseq analysis on flamingo, using the pipelines from
 
 At each step, results are zipped and automatically sent to my NextCloud shared directory.
 
-## GR_wes_pipe_launcher.sh
+### GR_wes_pipe_launcher.sh
 
 A bash script to perform a whole exome analysis on flamingo, using the pipeline from M'boyba DIOP (Khadija) and Yannick BOURSIN :
+
+
+## R
+
+## immune-decov_difftest.R
+
+A script to perform differential analysis on immune cellularity prediction results (from the 'immune-decov' pipeline) on (clinical) sample annotations, using a Wilcoxon sum-rank test (T-test, optionally).

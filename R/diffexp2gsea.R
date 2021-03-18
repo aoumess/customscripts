@@ -138,7 +138,7 @@ gsea.run <- function(geneList = NULL, func.name = 'clusterProfiler::GSEA', speci
     
     ## Functions requiring a TERM2GENE (msigdbr, CellMarkers, ...)
     gsea.res <- gse.function(geneList = geneList, TERM2GENE = t2g, pvalueCutoff = pvalueCutoff, minGSSize = minGSSize, seed = seed, ...)
-    gsea.res@setType <- paste(c(func.name, t2g.name), collapse = '_')
+    func.name <- paste(c(func.name, t2g.name), collapse = '_')
   } else if (func.name == 'meshes::gseMeSH') {
     ## MeSH (requires additional 'MeSHDb', 'database' and 'category' parameters)
     mesh.sp <- paste0(c('MeSH.', substr(unlist(strsplit(species, ' ')), c(1, 1), c(1,2)), '.eg.db'), collapse = '')
@@ -520,16 +520,16 @@ for (x in c('clusterProfiler::enrichKEGG', 'clusterProfiler::enrichMKEGG')) {
 }
 
 
-## CELLMARKERS
+## CELLMARKER
 ### Assess cell types from an online table
 ### NOTE : It's the same way to call the 'gsea.run' / 'ora.run' functions as for MSIGDB, but with a single bank (so, no loop).
 
-### Import the CellMarkers bank
+### Import the CellMarker bank
 library(tidyverse)
 cell_markers <- vroom::vroom('http://bio-bigdata.hrbmu.edu.cn/CellMarker/download/Human_cell_markers.txt') %>% tidyr::unite("cellMarker", tissueType, cancerType, cellName, sep=", ") %>% dplyr::select(cellMarker, geneID) %>% dplyr::mutate(geneID = strsplit(geneID, ', '))
 
 ### GSEA
-my.gsea.res <- gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = 'clusterProfiler::GSEA', t2g = cell_markers, t2g.name = 'CellMarkers', gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
+my.gsea.res <- gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = 'clusterProfiler::GSEA', t2g = cell_markers, t2g.name = 'CellMarker', gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
 gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name)
 
 #### ORA
@@ -553,24 +553,6 @@ mesh.sp <- paste0(c('MeSH.', substr(unlist(strsplit(species, ' ')), c(1, 1), c(1
 ### Checking which MeSH DBs are available for the current species.
 mesh.dbs <- MeSHDbi::listDatabases(eval(parse(text = paste0(mesh.sp, '::', mesh.sp))))[,1]
 
-
-### GSEA
-#### WARNING !! Needs too much memory for a laptop (probably over 64 GB of RAM, easily...)
-mesh.func.name <- 'meshes::gseMeSH'
-for (y in mesh.dbs) {
-  for (x in mesh.categories) {
-    message(paste0(y, ' ', x))
-    if (y %in% mesh.dbs) {
-      my.gsea.res <- try(gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = mesh.func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes, database = y, category = x), silent = TRUE)
-      if (!is(my.gsea.res, class2 = 'try-error')) {
-        ## Little hack specific to MeSH results (as I was not able to get the value of extra parameters 'database' and 'category' from within the 'gsea.run()' function)
-        my.gsea.res@setType <- paste(c(mesh.func.name, y, x), collapse = '_')
-        gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name)
-      }
-    } else message(paste0("Unsupported MeSH database '", y, "'. Expecting one of : '", paste(mesh.dbs, collapse = "', '"), "'."))
-  }
-}
-
 ### ORA
 #### WARNING !! the 'gene2pubmed' requires a lot of RAM (~12 GB) !!
 mesh.func.name <- 'meshes::enrichMeSH'
@@ -587,6 +569,25 @@ for (y in mesh.dbs) {
     } else message(paste0("Unsupported MeSH database '", y, "'. Expecting one of : '", paste(mesh.dbs, collapse = "', '"), "'."))
   }
 }
+
+
+### GSEA
+#### WARNING !! Needs too much memory for a laptop (probably over 64 GB of RAM, easily...). SO, not recommended out of flamingo.
+mesh.func.name <- 'meshes::gseMeSH'
+for (y in mesh.dbs) {
+  for (x in mesh.categories) {
+    message(paste0(y, ' ', x))
+    if (y %in% mesh.dbs) {
+      my.gsea.res <- try(gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = mesh.func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes, database = y, category = x), silent = TRUE)
+      if (!is(my.gsea.res, class2 = 'try-error')) {
+        ## Little hack specific to MeSH results (as I was not able to get the value of extra parameters 'database' and 'category' from within the 'gsea.run()' function)
+        my.gsea.res@setType <- paste(c(mesh.func.name, y, x), collapse = '_')
+        gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name)
+      }
+    } else message(paste0("Unsupported MeSH database '", y, "'. Expecting one of : '", paste(mesh.dbs, collapse = "', '"), "'."))
+  }
+}
+
 
 ##################
 #### TESTZONE ####

@@ -245,7 +245,7 @@ MEM=2
 cd ${WORKDIR}
 sbatch --mem=${MEM}'G' --cpus-per-task=${NTHREADS} --tasks=1 --nodes=1 -J 'DGE_zip' \
 -e ${DGEDIR}'/logs/'${PFBPROJECTNAME}'_dge_zip.e' -o ${DGEDIR}'/logs/'${PFBPROJECTNAME}'_dge_zip.o' --wrap \
-"zip -r -9 --exclude='*.RDS' --exclude=*.gtf ${WORKDIR}'/'${PFBPROJECTNAME}_dge.zip `basename ${DGEDIR}`"
+"zip -r -9 --exclude='*.RDS' --exclude=*.gtf --exclude=*.out --exclude=*.err ${WORKDIR}'/'${PFBPROJECTNAME}_dge.zip `basename ${DGEDIR}`"
 
 curl -u ${NCCRED} -T ${WORKDIR}'/'${PFBPROJECTNAME}'_dge.zip' ${NCOUTDIR}
 
