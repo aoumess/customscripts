@@ -48,15 +48,16 @@ svd.plotter <- function(raw.data = NULL, norm.data = NULL, out.dir = NULL) {
   ## Checks
   argg <- c(as.list(environment()))
   if(any(is.null(unlist(argg)))) stop('All parameters to the "svd.plotter" function should be set.')
+  cur.pd <- raw.data$pd[,vapply(raw.data$pd, function(x) { nlevels(as.factor(x)) }, 1) > 1]
   dir.create(path = out.dir, recursive = TRUE, showWarnings = FALSE)
   png(paste0(out.dir, "/SVD.png"), 1024, 512)
-  cSVD.res <- champ.SVD                        (beta = norm.data, rgSet = raw.data$rgSet, pd = raw.data$pd, resultsDir = out.dir, RGEffect = TRUE, PDFplot = FALSE, Rplot = TRUE)
+  cSVD.res <- ChAMP::champ.SVD(beta = norm.data, rgSet = raw.data$rgSet, pd = cur.pd, resultsDir = out.dir, RGEffect = TRUE, PDFplot = FALSE, Rplot = TRUE)
   dev.off()
   return(invisible(NULL))
 }
 
 ### Perform QC plots
-qc.plotter <- function(out.dir = NULL, raw.data = NULL, norm.data = NULL, pheno = NULL) {
+qc.plotter <- function(raw.data = NULL, norm.data = NULL, pheno = NULL, out.dir = NULL) {
   ## Checks
   argg <- c(as.list(environment()))
   if(any(is.null(unlist(argg)))) stop('All parameters to the "qc.plotter" function should be set.')
@@ -98,12 +99,33 @@ GSEA.runner <- function(beta = NULL, pheno = NULL, method = 'ebayes', adjPval = 
   return(invisible(NULL))
 }
 
-
+### Perform CNA estimation
+### . 'raw.data' : the result object of data.loader() (or ChAMP::champ.load())
+### . 'pheno.category' : name of an annotation column from the samplesheet, here available in the '$pd' data.frame of 'raw.data'. This is not used if the 'control' parameter is set to FALSE.
+### . 'control' : sets if the CNA computation is made against :
+###   .. the average of all samples, if 'control' is set to FALSE.
+###   .. the average of the samples defined by the 'controlGroup' value in the 'pheno.category' factor, if both parameters are set and 'control' set to TRUE.
+###   .. the average of internal profiles from ChAMP if 'controlGroup' is set to 'champCtls' and 'control' set to TRUE.
+### . 'arraytype' : '450K' or 'EPIC'
+### . 'out.dir' : the output directory
+### . ... : any other parameter to ChAMP::champ.CNA()
+CNA.runner <- function(raw.data = NULL, pheno.category = 'Sample_Group', control = FALSE, controlGroup = NULL, arraytype = '450K', out.dir = NULL, ...) {
+  
+  if(any(is.null(c(raw.data, pheno, out.dir)))) stop("All parameters but 'controlGroup' should be set.")
+  CNA.res <- ChAMP::champ.CNA(intensity = raw.data$intensity, pheno = raw.data$pd[[pheno.category]], control = control, controlGroup = controlGroup, sampleCNA = TRUE, groupFreqPlots = ifelse(!control, TRUE, FALSE), Rplot = TRUE, PDFplot = TRUE, arraytype = '450K', resultsDir = cna.dir)
+  saveRDS(CNA.res, file = paste0(cna.dir, '/CNA_results.RDS'), compress = 'bzip2')
+  #### Writing CBS files
+  for (x in names(CNA.res$sampleResult)) {
+    CNA.res$sampleResult[[x]]$ID <- x
+    write.table(cna$sampleResult[[x]], file = paste0(cna.dir, '/', x, '_segments.cbs'), sep="\t", quote = FALSE, row.names = FALSE)
+  }
+  return(CNA.res)
+}
 
 
 ## VARIABLES
-idat.dir <- '/home/job/WORKSPACE/TNE_Ivana/methylation_450k/IDAT_192/'
-res.dir <- '/home/job/WORKSPACE/TNE_Ivana/methylation_450k/ChAMP/NORMAL_48/'
+idat.dir <- '/home/job/WORKSPACE/B16_DAPL_TNE_POUMON_CH3/methylation_450k/IDAT_192/'
+res.dir <- '/home/job/WORKSPACE/B16_DAPL_TNE_POUMON_CH3/methylation_450k/ChAMP/TUMOR_48/'
 norm.method <- 'BMIQ'
 gsea.method <- 'ebayes'
 nthread <- 2
@@ -113,6 +135,8 @@ diff.categories <- c('Histology', 'Gender')
 cna.do <- FALSE
 dma.do <- TRUE
 qcplot.do <- TRUE
+cna.category <- 'Tumor_Status'
+cna.control.level <- 'Normal'
 
 ## Getting arguments just to know if at least one was supplied
 cmd.args <- base::commandArgs(trailingOnly=TRUE)
@@ -175,7 +199,7 @@ if(length(cmd.args) == 0) {
   svd.norm.dir <- paste0(norm.dir, "/SVD")
   svd.plotter(raw.data = mych3, norm.data = mych3.norm, out.dir = svd.norm.dir)
   
-  ## DIFFERENTIAL ANALYSES
+    ## DIFFERENTIAL ANALYSES
   if(dma.do & length(diff.categories) > 0) {
     message("Performing DMA ...")
     
@@ -204,7 +228,7 @@ if(length(cmd.args) == 0) {
         dir.create(pheno.dir, recursive = TRUE)
         
         ### QC plots
-        if(qcplot.do) qc.plotter(out.dir = pheno.dir, raw.data = mych3$beta[,nonasamp], norm.data = mych3.norm[,nonasamp], pheno = oripheno[nonasamp])
+        if(qcplot.do) qc.plotter(raw.data = mych3$beta[,nonasamp], norm.data = mych3.norm[,nonasamp], pheno = oripheno[nonasamp], out.dir = pheno.dir)
         
         ## Generating levels combinations
         pheno.comb <- combn(levels(oripheno), 2)
@@ -331,15 +355,41 @@ if(length(cmd.args) == 0) {
   
   ## CNA
   if(cna.do) {
+    
     ### Using package internal reference profiles
     cna.def.dir <- paste0(norm.dir, '/CNA/champCtls_Ref')
-    dir.create(cna.def.dir)
-    system.time(CNA.res.def <- ChAMP::champ.CNA(intensity = mych3$intensity, pheno = mych3$pd$Sample_Group, control = TRUE, controlGroup = "champCtls", sampleCNA = TRUE, groupFreqPlots = FALSE, Rplot = TRUE, PDFplot = TRUE, arraytype = '450K', resultsDir = cna.def.dir))
-    saveRDS(CNA.res.def, file = paste0(cna.def.dir, '/CNA_champCtls_results.RDS'), compress = 'bzip2')
+    dir.create(cna.def.dir, recursive = TRUE)
+    CNA.res.def <- CNA.runner(raw.data = mych3, pheno.category = 'Sample_Group', control = TRUE, controlGroup = 'chamtCtls', arraytype = '450K', out.dir = cna.def.dir) 
+    rm(CNA.res.def)
+    # CNA.res.def <- ChAMP::champ.CNA(intensity = mych3$intensity, pheno = mych3$pd$Sample_Group, control = TRUE, controlGroup = "champCtls", sampleCNA = TRUE, groupFreqPlots = FALSE, Rplot = TRUE, PDFplot = TRUE, arraytype = '450K', resultsDir = cna.def.dir)
+    # #### Saving data in RDS
+    # saveRDS(CNA.res.def, file = paste0(cna.def.dir, '/CNA_champCtls_results.RDS'), compress = 'bzip2')
+    # #### Writing CBS files
+    # for (x in names(CNA.res.def$sampleResult)) {
+    #   CNA.res.def$sampleResult[[x]]$ID <- x
+    #   write.table(cna$sampleResult[[x]], file = paste0(cna.def.dir, '/', x, '_segments.cbs'), sep="\t", quote = FALSE, row.names = FALSE)
+    # }
+    
     ### Using the mean of all samples as control
     cna.mean.dir <- paste0(norm.dir, '/CNA/Mean_Ref')
-    dir.create(cna.mean.dir)
-    system.time(CNA.res.mean <- ChAMP::champ.CNA(intensity = mych3$intensity, pheno = mych3$pd$Sample_Group, control = FALSE, sampleCNA = TRUE, groupFreqPlots = FALSE, Rplot = TRUE, PDFplot = TRUE, arraytype = '450K', resultsDir = cna.mean.dir))
-    saveRDS(CNA.res.mean, file = paste0(cna.mean.dir, '/CNA_mean_results.RDS'), compress = 'bzip2')
+    dir.create(cna.mean.dir, recursive = TRUE)
+    CNA.res.mean <- CNA.runner(raw.data = mych3, pheno.category = 'Sample_Group', control = FALSE, controlGroup = NULL, arraytype = '450K', out.dir = cna.mean.dir)
+    rm(CNA.res.mean)
+    # CNA.res.mean <- ChAMP::champ.CNA(intensity = mych3$intensity, pheno = mych3$pd$Sample_Group, control = FALSE, sampleCNA = TRUE, groupFreqPlots = FALSE, Rplot = TRUE, PDFplot = TRUE, arraytype = '450K', resultsDir = cna.mean.dir)
+    # saveRDS(CNA.res.mean, file = paste0(cna.mean.dir, '/CNA_mean_results.RDS'), compress = 'bzip2')
+    # #### Writing CBS files
+    # for (x in names(CNA.res.mean$sampleResult)) {
+    #   CNA.res.mean$sampleResult[[x]]$ID <- x
+    #   write.table(cna$sampleResult[[x]], file = paste0(cna.mean.dir, '/', x, '_segments.cbs'), sep="\t", quote = FALSE, row.names = FALSE)
+    # }
+    
+    ### Using the mean of all samples as control
+    if(!is.null(cna.category) & !is.null(cna.control.level)) {
+      
+    }
+    cna.categ.dir <- paste0(norm.dir, '/CNA/', cna.category, '_', controlGroup, '_Ref')
+    dir.create(cna.categ.dir, recursive = TRUE)
+    CNA.res.categ <- CNA.runner(raw.data = mych3, pheno.category = cna.category, control = TRUE, controlGroup = cna.control.level, arraytype = '450K', out.dir = cna.categ.dir)
+    
   }
 }

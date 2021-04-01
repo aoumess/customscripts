@@ -53,14 +53,14 @@ IMMUNEDIR=${WORKDIR}'/IMMUNE'
 
 
 ## Creating project dir
-NCOUTDIR=${NCROOTDIR}'/'${PFBPROJECTNAME}
-curl --user ${NCCRED} -X MKCOL $NCOUTDIR
-NCOUTDIR=${NCOUTDIR}'/'${PFGPROJECTNAME}
-curl --user ${NCCRED} -X MKCOL $NCOUTDIR
-NCOUTDIR=${NCOUTDIR}'/'${RUNNAME}'/'
+NCOUTDIRA=${NCROOTDIR}'/'${PFBPROJECTNAME}
+curl --user ${NCCRED} -X MKCOL $NCOUTDIRA
+NCOUTDIRB=${NCOUTDIRA}'/'${PFGPROJECTNAME}
+curl --user ${NCCRED} -X MKCOL $NCOUTDIRB
+NCOUTDIR=${NCOUTDIRB}'/'${RUNNAME}'/'
 curl --user ${NCCRED} -X MKCOL $NCOUTDIR
 
-NCOUTDIR=${NCROOTDIR}'/'${PFBPROJECTNAME}'/'${PFGPROJECTNAME}'/'${RUNNAME}'/'
+# NCOUTDIR=${NCROOTDIR}'/'${PFBPROJECTNAME}'/'${PFGPROJECTNAME}'/'${RUNNAME}'/'
 
 ## GENERATING SAMPLENAMES
 SNARRAY=`ls ${RAWDATADIR}/*.f*q* | xargs -n 1 basename | cut -d "_" -f ${SNAMEBLOCKS}`
@@ -72,7 +72,7 @@ MEM=5
 conda activate readsqc
 mkdir -p ${RAWQCDIR}'/fastqc' ${RAWQCDIR}'/fastqscreen' ${RAWQCDIR}'/multiqc' ${RAWQCDIR}'/logs'
 cd ${RAWQCDIR}
-for SAMPLENAME in ${SNAMES[*]}; do {
+for SAMPLENAME in ${SNAMES[@]}; do {
 	echo ${SAMPLENAME};
 	TOOLEO='rawqc'
 	sbatch --mem=${MEM}'G' --cpus-per-task=${NTHREADS} --tasks=1 --nodes=1 -J ${TOOLEO}'.'${SAMPLENAME} \
@@ -107,7 +107,7 @@ MEM=10
 mkdir -p ${TRIMDIR}'/fastp_report/' ${TRIMDIR}'/logs/' ${TRIMDIR}'/failed_reads/'
 conda activate fastp
 cd ${TRIMDIR}
-for SAMPLENAME in ${SNAMES[*]}; do {
+for SAMPLENAME in ${SNAMES[@]}; do {
   echo ${SAMPLENAME};
   sbatch --mem=${MEM}'G' --cpus-per-task=${NTHREADS} --tasks=1 --nodes=1 -J 'trim.'${SAMPLENAME} -e ${TRIMDIR}'/logs/'${SAMPLENAME}'_trim.e' -o ${TRIMDIR}'/logs/'${SAMPLENAME}'_trim.o' --wrap \
   "fastp -i ${RAWDATADIR}/${SAMPLENAME}*_${R1CODE}*.f*.gz -I ${RAWDATADIR}/${SAMPLENAME}*_${R2CODE}*.f*.gz \
@@ -127,7 +127,7 @@ NTHREADS=3
 MEM=5
 conda activate readsqc
 mkdir -p ${TRIMDIR}'/fastqc' ${TRIMDIR}'/fastqscreen' ${TRIMDIR}'/multiqc' ${TRIMDIR}'/logs'
-for SAMPLENAME in ${SNAMES[*]}; do {
+for SAMPLENAME in ${SNAMES[@]}; do {
 	echo ${SAMPLENAME};
 	TOOLEO='trimqc'
 	sbatch --mem=${MEM}'G' --cpus-per-task=${NTHREADS} --tasks=1 --nodes=1 -J ${TOOLEO}'.'${SAMPLENAME} \

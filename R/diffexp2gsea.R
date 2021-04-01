@@ -438,7 +438,6 @@ ora.output <- function(enrichResult = NULL, comp.name = 'TEST', out.dir = getwd(
 }
 
 
-
 ##################
 #### EXAMPLES ####
 ##################
