@@ -1,6 +1,6 @@
 ## NEXTCLOUD
 NCUSER='B_JOB'
-NCCRED=${NCUSER}':Z03F4nny!0104'
+NCCRED=${NCUSER}':Z03F4nny!0107'
 NCROOTDIR='https://nextcloud.gustaveroussy.fr/remote.php/dav/files/B_JOB/'
 
 ## PARAMETERS

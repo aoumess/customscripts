@@ -42,7 +42,7 @@ msigdb_to_t2g <- function(species = 'Homo sapiens', category = NULL, subcategory
 }
 
 ## Function to create input objects for gsea.run() and ora.run() from an output of our rna-salmon-deseq2 pipeline
-### . 'deseq2.res.file' : character ; output table from the rna-salmon-deseq2 pipeline (the *_complete.tsv table)
+### . 'deseq2.res.data' : data.frame ; output table from the rna-salmon-deseq2 pipeline
 ### . 'species' : character ; species name (Homo sapiens, Mus musculus, etc ...)
 ### . 'geneid.colname' : character ; column name in 'deseq2.res.file' input for the gene identifier.
 ### . 'geneid.type' : character ; type of gene identifier. Should be one value of the output of clusterProfiler::idType("org.Xx.eg.db") (with 'Xx' corresponding as the species of interest). Usually 'SYMBOL' or 'ENSEMBL'.
@@ -53,10 +53,10 @@ msigdb_to_t2g <- function(species = 'Homo sapiens', category = NULL, subcategory
 ### . 'topN.cutoff' : numeric ; cutoff to use to select 'topN' genes on 'topN.order.colname' when there are less significant genes than 'topN'.
 ### . 'topN.keep.operator' : character ; operator (given as a character) to keep genes when evaluating their 'topN.order.colname' value to 'topN.cutoff' (usually one of '<', '<=', '>', '>=').
 ### . '...' : any parameter to read.table() to handle the input file (usually 'sep = "\t", header = TRUE, as.is = TRUE')
-pipe2enr <- function(deseq2.res.file = NULL, species = "Homo sapiens", geneid.colname = 'Gene_Name', geneid.type = 'SYMBOL', value.colname = 'stat_change', topN.max = 100, topN.order.colname = 'Adjusted_PValue', topN.order.decreasing = FALSE, topN.cutoff = 5E-02, topN.keep.operator = '<', ...) {
+table2enr <- function(deseq2.res.data = NULL, species = "Homo sapiens", geneid.colname = 'Gene_Name', geneid.type = 'SYMBOL', value.colname = 'stat_change', topN.max = 100, topN.order.colname = 'Adjusted_PValue', topN.order.decreasing = FALSE, topN.cutoff = 5E-02, topN.keep.operator = '<') {
   ## Checks
   ## Loading the DE table
-  deres <- read.table(file = deseq2.res.file, ...)
+  deres <- deseq2.res.data
   ## Forcing gene ID to be a character
   deres[[geneid.colname]] <- as.character(deres[[geneid.colname]])
   ## Converting non-Entrez IDs to Entrez IDs
@@ -93,6 +93,16 @@ pipe2enr <- function(deseq2.res.file = NULL, species = "Homo sapiens", geneid.co
               gene2Symbol = gconv$ENTREZID))
 }
 
+## Wrapper to table2enr that takes as input the results file (the *_complete.tsv table) from our salmon+DESeq2 pipeline (by Thibault Dayris)
+## ... = any parameter for table2enr()
+pipe2enr <- function(deseq2.res.file = NULL, ...) {
+  ## Checks
+  ## Loading the DE table
+  deres <- read.table(file = deseq2.res.file, header = TRUE, sep = "\t", as.is = TRUE)
+  ## Launching table2enr()
+  table2enr(deseq2.res.data = deres, ...)
+}
+  
 ### FUNCTION TO PERFORM GSEA
 ### . 'geneList' : numeric vector : a named vector of decreasing values, with EntrezIDs as names
 ### . 'species' : character ; a species name, as in the 'species_name' column of msigdbr::msigdbr_species()
@@ -198,9 +208,7 @@ gsea.output <- function(gseaResult = NULL, comp.name = 'TEST', out.dir = getwd()
 
     ## Heatplot (needs readable)
     if (!is.null(heatplot)) {
-      hp <- enrichplot::heatplot(gseaResult_readable, showCategory = heatplot, foldChange = gseaResult@geneList)
-      # message(nrow(hp$data))
-      # message((min(length(which(gsea.sig.tf)), heatplot) * 12) + 150)
+      suppressMessages(hp <- enrichplot::heatplot(gseaResult_readable, showCategory = heatplot, foldChange = gseaResult@geneList))
       png(paste0(gsea.dir, '/GSEA.heatplot.png'), width = min(5000, (5 * nrow(hp$data)) + 500), height = (min(length(which(gsea.sig.tf)), heatplot) * 12) + 150)
       print(hp)
       dev.off()
@@ -215,8 +223,9 @@ gsea.output <- function(gseaResult = NULL, comp.name = 'TEST', out.dir = getwd()
       plot.function <- base::get(func.split[2], envir = loadNamespace(func.split[1]))
       gseaBak <- gseaResult
       gseaResult@result$Description <- gsub(pattern = '_', ' ', gseaResult@result$Description, fixed = TRUE)
+      suppressMessages(p <- plot.function(gseaResult, showCategory = unname(complot[cx]), title = paste(c(comp.name, gseaResult@setType, 'GSEA'), collapse = "\n"), split = '.sign') + ggplot2::facet_grid(~ .sign) + ggplot2::scale_y_discrete(labels=function(x) stringr::str_wrap(x, width=100)))
       png(paste0(gsea.dir, '/GSEA.', func.split[2], '.png'), width = 1000, height = (min(length(which(gsea.sig.tf)), unname(complot[cx])) * 20) + 300)
-      print(plot.function(gseaResult, showCategory = unname(complot[cx]), title = paste(c(comp.name, gseaResult@setType, 'GSEA'), collapse = "\n"), split = '.sign') + ggplot2::facet_grid(~ .sign) + ggplot2::scale_y_discrete(labels=function(x) stringr::str_wrap(x, width=100)))
+      print(p)
       dev.off()
       gseaResult <- gseaBak
       rm(gseaBak)
@@ -228,7 +237,7 @@ gsea.output <- function(gseaResult = NULL, comp.name = 'TEST', out.dir = getwd()
       gseaResult@result$Description <- gsub(pattern = '_', ' ', gseaResult@result$Description, fixed = TRUE)
       rip <- enrichplot::ridgeplot(gseaResult, showCategory = ridgeplot)
       png(paste0(gsea.dir, '/GSEA.ridgeplot.png'), width = 1000, height = (min(length(which(gsea.sig.tf)), ridgeplot) * 20) + 300)
-      print(rip + ggplot2::ggtitle(paste(c(comp.name, gseaResult@setType, 'GSEA'), collapse = "\n")) + ggplot2::scale_y_discrete(labels=function(x) stringr::str_wrap(x, width=100)))
+      suppressMessages(print(rip + ggplot2::ggtitle(paste(c(comp.name, gseaResult@setType, 'GSEA'), collapse = "\n")) + ggplot2::scale_y_discrete(labels=function(x) stringr::str_wrap(x, width=100))))
       dev.off()
       gseaResult <- gseaBak
       rm(gseaBak)
@@ -239,12 +248,12 @@ gsea.output <- function(gseaResult = NULL, comp.name = 'TEST', out.dir = getwd()
       gseaplot.dir <- paste0(gsea.dir, '/gseaplot_clusterProfiler/')
       dir.create(path = gseaplot.dir, recursive = TRUE)
       png(paste0(gseaplot.dir, '/GSEA.gseaplot_cP_%04d.png'), width = 1024, height = 768)
-      for (x in 1:nrow(gseaResult)) print(enrichplot::gseaplot(gseaResult, geneSetID = x, title = paste0(toupper(gseaResult@result$Description[x]), "\nNES = ", sprintf("%.2f", gseaResult@result$NES[x]), " // Adj.p = ", sprintf(fmt = "%.1E", gseaResult@result$p.adjust[x]))))
+      for (x in 1:nrow(gseaResult)) suppressMessages(print(enrichplot::gseaplot(gseaResult, geneSetID = x, title = paste0(toupper(gseaResult@result$Description[x]), "\nNES = ", sprintf("%.2f", gseaResult@result$NES[x]), " // Adj.p = ", sprintf(fmt = "%.1E", gseaResult@result$p.adjust[x])))))
       dev.off()
       gseaplot.dir <- paste0(gsea.dir, '/gseaplot_Broad/')
       dir.create(path = gseaplot.dir, recursive = TRUE)
       png(paste0(gseaplot.dir, '/GSEA.gseaplot_Broad_%04d.png'), width = 1024, height = 768)
-      for (x in 1:nrow(gseaResult)) print(enrichplot::gseaplot2(gseaResult, geneSetID = x, title = paste0(toupper(gseaResult@result$Description[x]), "\nNES = ", sprintf("%.2f", gseaResult@result$NES[x]), " // Adj.p = ", sprintf(fmt = "%.1E", gseaResult@result$p.adjust[x]))))
+      for (x in 1:nrow(gseaResult)) suppressMessages(print(enrichplot::gseaplot2(gseaResult, geneSetID = x, title = paste0(toupper(gseaResult@result$Description[x]), "\nNES = ", sprintf("%.2f", gseaResult@result$NES[x]), " // Adj.p = ", sprintf(fmt = "%.1E", gseaResult@result$p.adjust[x])))))
       dev.off()
     }
     ## KEGG pathview
@@ -255,8 +264,8 @@ gsea.output <- function(gseaResult = NULL, comp.name = 'TEST', out.dir = getwd()
       for (x in which(gsea.sig.tf)) {
         kegg.id <- gseaResult@result$ID[x]
         library(pathview)
-        pathview::pathview(gene.data = gseaResult@geneList, pathway.id = kegg.id, species = kegg.sp, limit = list(gene=2, cpd=1), low=c("red", "blue"), high = c("cornflowerblue", "yellow"), kegg.dir = kegg.dir)
-        file.rename(from = paste0(kegg.id, '.pathview.png'), to = paste0(kegg.dir, '/', kegg.id, '.pathview.png'))
+        ptry <- try(pathview::pathview(gene.data = gseaResult@geneList, pathway.id = kegg.id, species = kegg.sp, limit = list(gene=2, cpd=1), low=c("red", "blue"), high = c("cornflowerblue", "yellow"), kegg.dir = kegg.dir), silent = TRUE)
+        if(!is(ptry, class2 = 'try-error')) file.rename(from = paste0(kegg.id, '.pathview.png'), to = paste0(kegg.dir, '/', kegg.id, '.pathview.png'))
       }
     }
     if (!is.null(cnetplot)) {
@@ -264,7 +273,7 @@ gsea.output <- function(gseaResult = NULL, comp.name = 'TEST', out.dir = getwd()
       p <- try(enrichplot::cnetplot(gseaResult_readable, showCategory = cnetplot, circular = FALSE, colorEdge = TRUE), silent = TRUE)
       if(!is(p, class2 = 'try-error')) {
         png(paste0(gsea.dir, '/GSEA.cnetplot_', cnetplot, '.png'), width = 2000, height = 2000)
-        print(p + ggplot2::scale_fill_continuous(guide = ggplot2::guide_legend()) + ggplot2::theme(legend.position="bottom"))
+        try(print(p + ggplot2::scale_fill_continuous(guide = ggplot2::guide_legend()) + ggplot2::theme(legend.position="bottom")), silent = TRUE)
         dev.off()
       } else message(paste0('Error captured for cnetplot : \n"', p, '"'))
     }
@@ -273,7 +282,7 @@ gsea.output <- function(gseaResult = NULL, comp.name = 'TEST', out.dir = getwd()
       p <- try(enrichplot::emapplot(enrichplot::pairwise_termsim(gseaResult_readable, showCategory = emapplot), showCategory = emapplot, layout = 'kk'), silent = TRUE)
       if(!is(p, class2 = 'try-error')) {
         png(paste0(gsea.dir, '/GSEA.emapplot_', emapplot, '.png'), width = 1500, height = 1500)
-        print(p + ggplot2::scale_fill_continuous(guide = ggplot2::guide_legend()) + ggplot2::theme(legend.position="bottom"))
+        try(print(p + ggplot2::scale_fill_continuous(guide = ggplot2::guide_legend()) + ggplot2::theme(legend.position="bottom")), silent = TRUE)
         dev.off()
       } else message(paste0('Error captured for emapplot : \n"', p, '"'))
     }
@@ -411,8 +420,8 @@ ora.output <- function(enrichResult = NULL, comp.name = 'TEST', out.dir = getwd(
         ## Custom geneList limited to our topN signature
         cur.geneList <- geneList[enrichResult@gene2Symbol]
         library(pathview)
-        suppressMessages(pathview::pathview(gene.data = cur.geneList, pathway.id = kegg.id, species = kegg.sp, limit = list(gene=2, cpd=1), low=c("red", "blue"), high = c("cornflowerblue", "yellow"), kegg.dir = kegg.dir))
-        file.rename(from = paste0(kegg.id, '.pathview.png'), to = paste0(kegg.dir, '/', kegg.id, '.pathview.png'))
+        ptry <- try(suppressMessages(pathview::pathview(gene.data = cur.geneList, pathway.id = kegg.id, species = kegg.sp, limit = list(gene=2, cpd=1), low=c("red", "blue"), high = c("cornflowerblue", "yellow"), kegg.dir = kegg.dir)), silent = TRUE)
+        if(!is(ptry, class2 = 'try-error')) file.rename(from = paste0(kegg.id, '.pathview.png'), to = paste0(kegg.dir, '/', kegg.id, '.pathview.png'))
       }
     }
     if (!is.null(cnetplot)) {
@@ -420,7 +429,7 @@ ora.output <- function(enrichResult = NULL, comp.name = 'TEST', out.dir = getwd(
       p <- try(enrichplot::cnetplot(enrichResult_readable, showCategory = cnetplot, circular = FALSE, colorEdge = TRUE), silent = TRUE)
       if(!is(p, class2 = 'try-error')) {
         png(paste0(ora.dir, '/GSEA.cnetplot_', cnetplot, '.png'), width = 2000, height = 2000)
-        print(p + ggplot2::scale_fill_continuous(guide = ggplot2::guide_legend()) + ggplot2::theme(legend.position="bottom"))
+        try(print(p + ggplot2::scale_fill_continuous(guide = ggplot2::guide_legend()) + ggplot2::theme(legend.position="bottom")), silent = TRUE)
         dev.off()
       } else message(paste0('Error captured for cnetplot : \n"', p, '"'))
     }
@@ -429,7 +438,7 @@ ora.output <- function(enrichResult = NULL, comp.name = 'TEST', out.dir = getwd(
       p <- try(enrichplot::emapplot(enrichplot::pairwise_termsim(enrichResult_readable, showCategory = emapplot), showCategory = emapplot, layout = 'kk'), silent = TRUE)
       if(!is(p, class2 = 'try-error')) {
         png(paste0(ora.dir, '/GSEA.emapplot_', emapplot, '.png'), width = 2000, height = 2000)
-        print(p + ggplot2::scale_fill_continuous(guide = ggplot2::guide_legend()) + ggplot2::theme(legend.position="bottom"))
+        try(print(p + ggplot2::scale_fill_continuous(guide = ggplot2::guide_legend()) + ggplot2::theme(legend.position="bottom")), silent = TRUE) ## Can sometimes raise an error...
         dev.off()
       } else message(paste0('Error captured for emapplot : \n"', p, '"'))
       
@@ -438,31 +447,31 @@ ora.output <- function(enrichResult = NULL, comp.name = 'TEST', out.dir = getwd(
 }
 
 
-##################
-#### EXAMPLES ####
-##################
-
-## Setting variables
-defile <- '/home/job/WORKSPACE/B21002_DELE_01/B21002_DELE_01_dge/DGE/GSEAapp/Macrophage_type_compairing_Proinf_vs_Basal/Macrophage_type_compairing_Proinf_vs_Basal_complete.tsv'
-out.dir <- dirname(defile)
-comp.name <- basename(dirname(defile))
-species <- 'Homo sapiens'
-my.seed <- 1337
-de.min.p <- 5E-02
-enr.min.p <- 5E-02
-enr.min.genes <- 10
-topN <- 100
-
-## PREPARING INPUT (from a '*_complete.tsv' output table from our 'rna-salmon-deseq2' pipeline)
-enr.inputs <- pipe2enr(deseq2.res.file = defile, species = species, geneid.colname = 'Gene_Name', geneid.type = 'SYMBOL', value.colname = 'stat_change', topN.max = topN, topN.order.colname = 'Adjusted_PValue', topN.order.decreasing = FALSE, topN.cutoff = de.min.p, topN.keep.operator = '<', header = TRUE, sep = "\t", as.is = TRUE)
-
-## MSIGDB
-### Query any (and in this example, all) MsigDB banks available in the 'msigdbr' package. See http://www.gsea-msigdb.org/gsea/msigdb/collections.jsp
-### Get available species / collections
-msigdb.collections <- as.data.frame(msigdbr::msigdbr_collections())
-msigdb.species <- as.data.frame(msigdbr::msigdbr_species())
-
-### GSEA
+# ##################
+# #### EXAMPLES ####
+# ##################
+# 
+# ## Setting variables
+# defile <- '/home/job/WORKSPACE/B21002_DELE_01/B21002_DELE_01_dge/DGE/GSEAapp/Macrophage_type_compairing_Proinf_vs_Basal/Macrophage_type_compairing_Proinf_vs_Basal_complete.tsv'
+# out.dir <- dirname(defile)
+# comp.name <- basename(dirname(defile))
+# species <- 'Homo sapiens'
+# my.seed <- 1337
+# de.min.p <- 5E-02
+# enr.min.p <- 5E-02
+# enr.min.genes <- 10
+# topN <- 100
+# 
+# ## PREPARING INPUT (from a '*_complete.tsv' output table from our 'rna-salmon-deseq2' pipeline)
+# enr.inputs <- pipe2enr(deseq2.res.file = defile, species = species, geneid.colname = 'Gene_Name', geneid.type = 'SYMBOL', value.colname = 'stat_change', topN.max = topN, topN.order.colname = 'Adjusted_PValue', topN.order.decreasing = FALSE, topN.cutoff = de.min.p, topN.keep.operator = '<')
+# 
+# ## MSIGDB
+# ### Query any (and in this example, all) MsigDB banks available in the 'msigdbr' package. See http://www.gsea-msigdb.org/gsea/msigdb/collections.jsp
+# ### Get available species / collections
+# msigdb.collections <- as.data.frame(msigdbr::msigdbr_collections())
+# msigdb.species <- as.data.frame(msigdbr::msigdbr_species())
+# 
+# ### GSEA
 for (x in seq_len(nrow(msigdb.collections))) {
   my.collec <- unlist(msigdb.collections[x, c("gs_cat", "gs_subcat"), drop = TRUE])
   ## Import the TERM2GENE object corresponding to the desired category/subcategory combo
@@ -524,7 +533,7 @@ for (x in c('clusterProfiler::enrichKEGG', 'clusterProfiler::enrichMKEGG')) {
 ### NOTE : It's the same way to call the 'gsea.run' / 'ora.run' functions as for MSIGDB, but with a single bank (so, no loop).
 
 ### Import the CellMarker bank
-library(tidyverse)
+`%>%` <- dplyr::`%>%`
 cell_markers <- vroom::vroom('http://bio-bigdata.hrbmu.edu.cn/CellMarker/download/Human_cell_markers.txt') %>% tidyr::unite("cellMarker", tissueType, cancerType, cellName, sep=", ") %>% dplyr::select(cellMarker, geneID) %>% dplyr::mutate(geneID = strsplit(geneID, ', '))
 
 ### GSEA
@@ -535,57 +544,57 @@ gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name)
 my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, species = species, func.name = 'clusterProfiler::enricher', t2g = cell_markers, t2g.name = 'CellMarkers', gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
 ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, geneList = enr.inputs$gsea.genevec)
 
-
-## MESH (WARNING : MEMORY OGRE AND SLOW !! Big DBs, 3 sources, 16 categories ! 64 GB of RAM required for most bases !
-### Requires additional parameters :
-### . 'MeSHDb' : character ; name of a MeSH [NO : AUTO FROM SPECIES NAME]
-### . 'database' : character ; MeSH source type (can be 'gendoo' = text-mining, 'gene2pubmed' = manual curation by NCBI team, 'RBBH' = sequence homology with BLASTP search @ E-value < 1E-50)
-### . 'category' : character ; name of a MeSH category sub-db (namely 'A', 'B', 'C', 'D', 'G').
-### NOTE : see https://yulab-smu.top/biomedical-knowledge-mining-book/meshes-semantic-similarity.html
-
-### List of requested MeSH DBs
-mesh.dbs <- c('gendoo', 'gene2pubmed', 'RBBH') ## 'RBBH' is not available for Homo sapiens.
-### List of requested MeSH categories
-mesh.categories <- toupper(letters[-c(15:21,23:25)]) ## More categories are available, but some do not seem to work with Homo sapiens for some of the DBs.
-### Building the MeSH package name corresponding to the current species
-mesh.sp <- paste0(c('MeSH.', substr(unlist(strsplit(species, ' ')), c(1, 1), c(1,2)), '.eg.db'), collapse = '')
-### Checking which MeSH DBs are available for the current species.
-mesh.dbs <- MeSHDbi::listDatabases(eval(parse(text = paste0(mesh.sp, '::', mesh.sp))))[,1]
-
-### ORA
-#### WARNING !! the 'gene2pubmed' requires a lot of RAM (~12 GB) !!
-mesh.func.name <- 'meshes::enrichMeSH'
-for (y in mesh.dbs) {
-  for (x in mesh.categories) {
-    message(paste0(y, ' ', x))
-    if (y %in% mesh.dbs) {
-      my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, species = species, func.name = mesh.func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes, database = y, category = x)
-      if(!is(my.ora.res, class2 = 'try-error')) {
-        ## Little hack specific to MeSH results (as I was not able to get the value of extra parameters 'database' and 'category' from within the 'gsea.run()' function)
-        my.ora.res@ontology <- paste(c(mesh.func.name, y, x), collapse = '_')
-        ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, geneList = enr.inputs$gsea.genevec)
-      }
-    } else message(paste0("Unsupported MeSH database '", y, "'. Expecting one of : '", paste(mesh.dbs, collapse = "', '"), "'."))
-  }
-}
-
-
-### GSEA
-#### WARNING !! Needs too much memory for a laptop (probably over 64 GB of RAM, easily...). SO, not recommended out of flamingo.
-mesh.func.name <- 'meshes::gseMeSH'
-for (y in mesh.dbs) {
-  for (x in mesh.categories) {
-    message(paste0(y, ' ', x))
-    if (y %in% mesh.dbs) {
-      my.gsea.res <- try(gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = mesh.func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes, database = y, category = x), silent = TRUE)
-      if (!is(my.gsea.res, class2 = 'try-error')) {
-        ## Little hack specific to MeSH results (as I was not able to get the value of extra parameters 'database' and 'category' from within the 'gsea.run()' function)
-        my.gsea.res@setType <- paste(c(mesh.func.name, y, x), collapse = '_')
-        gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name)
-      }
-    } else message(paste0("Unsupported MeSH database '", y, "'. Expecting one of : '", paste(mesh.dbs, collapse = "', '"), "'."))
-  }
-}
+# 
+# ## MESH (WARNING : MEMORY OGRE AND SLOW !! Big DBs, 3 sources, 16 categories ! 64 GB of RAM required for most bases !
+# ### Requires additional parameters :
+# ### . 'MeSHDb' : character ; name of a MeSH [NO : AUTO FROM SPECIES NAME]
+# ### . 'database' : character ; MeSH source type (can be 'gendoo' = text-mining, 'gene2pubmed' = manual curation by NCBI team, 'RBBH' = sequence homology with BLASTP search @ E-value < 1E-50)
+# ### . 'category' : character ; name of a MeSH category sub-db (namely 'A', 'B', 'C', 'D', 'G').
+# ### NOTE : see https://yulab-smu.top/biomedical-knowledge-mining-book/meshes-semantic-similarity.html
+# 
+# ### List of requested MeSH DBs
+# mesh.dbs <- c('gendoo', 'gene2pubmed', 'RBBH') ## 'RBBH' is not available for Homo sapiens.
+# ### List of requested MeSH categories
+# mesh.categories <- toupper(letters[-c(15:21,23:25)]) ## More categories are available, but some do not seem to work with Homo sapiens for some of the DBs.
+# ### Building the MeSH package name corresponding to the current species
+# mesh.sp <- paste0(c('MeSH.', substr(unlist(strsplit(species, ' ')), c(1, 1), c(1,2)), '.eg.db'), collapse = '')
+# ### Checking which MeSH DBs are available for the current species.
+# mesh.dbs <- MeSHDbi::listDatabases(eval(parse(text = paste0(mesh.sp, '::', mesh.sp))))[,1]
+# 
+# ### ORA
+# #### WARNING !! the 'gene2pubmed' requires a lot of RAM (~12 GB) !!
+# mesh.func.name <- 'meshes::enrichMeSH'
+# for (y in mesh.dbs) {
+#   for (x in mesh.categories) {
+#     message(paste0(y, ' ', x))
+#     if (y %in% mesh.dbs) {
+#       my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, species = species, func.name = mesh.func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes, database = y, category = x)
+#       if(!is(my.ora.res, class2 = 'try-error')) {
+#         ## Little hack specific to MeSH results (as I was not able to get the value of extra parameters 'database' and 'category' from within the 'gsea.run()' function)
+#         my.ora.res@ontology <- paste(c(mesh.func.name, y, x), collapse = '_')
+#         ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, geneList = enr.inputs$gsea.genevec)
+#       }
+#     } else message(paste0("Unsupported MeSH database '", y, "'. Expecting one of : '", paste(mesh.dbs, collapse = "', '"), "'."))
+#   }
+# }
+# 
+# 
+# ### GSEA
+# #### WARNING !! Needs too much memory for a laptop (probably over 64 GB of RAM, easily...). SO, not recommended out of flamingo.
+# mesh.func.name <- 'meshes::gseMeSH'
+# for (y in mesh.dbs) {
+#   for (x in mesh.categories) {
+#     message(paste0(y, ' ', x))
+#     if (y %in% mesh.dbs) {
+#       my.gsea.res <- try(gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = mesh.func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes, database = y, category = x), silent = TRUE)
+#       if (!is(my.gsea.res, class2 = 'try-error')) {
+#         ## Little hack specific to MeSH results (as I was not able to get the value of extra parameters 'database' and 'category' from within the 'gsea.run()' function)
+#         my.gsea.res@setType <- paste(c(mesh.func.name, y, x), collapse = '_')
+#         gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name)
+#       }
+#     } else message(paste0("Unsupported MeSH database '", y, "'. Expecting one of : '", paste(mesh.dbs, collapse = "', '"), "'."))
+#   }
+# }
 
 
 ##################

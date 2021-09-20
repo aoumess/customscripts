@@ -4,6 +4,9 @@
 ## - CRAN : optparse, devtools, foreach, dplyr
 ## - GITHUB : https://github.com/aoumess/chromosomes
 
+## Usage :
+## R CMD BATCH EaCoN_TCN_GIS_autoscorer -i path/to/eacon_results/samplename/ -g hg19 -s ASCAT
+
 ## Parsing args
 option_list <- list(
   optparse::make_option(c("-i", "--input-dir"), type = "character", default= NULL, help="Path leading to an EaCoN result directory (should end with a samplename : /path/to/samplename/)"),
@@ -11,7 +14,7 @@ option_list <- list(
   optparse::make_option(c("-s", "--segmenter"), type = "character", default="ASCAT", help="A segmenter name, supported by EaCoN (should be 'ASCAT', 'SEQUENZA' or 'FACETS')")
 )
 opt <- optparse::parse_args(optparse::OptionParser(option_list=option_list))
-# print (opt)
+print (opt)
 
 indir <- opt[["input-dir"]]
 genome <- opt[["genome"]]
@@ -76,6 +79,6 @@ LOKAL1 <- sum(foreach (k = unique(as.res$segments$chr), .combine = "c") %do% {
 })
 
 ## Generating output
-outdf <- data.frame(SCORE1 = SKOR1, SCORE2 = SKOR2, SCORE3 = SKOR3, NBSEG = NBSEG, LOCAL1 = LOKAL1, stringsAsFactors = FALSE)
-write.table(x = outdf, file = paste0(indir, '/', samplename, '_GIS_from_gamma', best.gamma, '.txt'), quote = FALSE, sep = "\t", row.names = FALSE)
+outdf <- data.frame(Samplename = samplename, Best_gamma = best.gamma, Ploidy = ploidy, Cellularity = as.res$aberrantcellfraction, GoF = gof, Psi = as.res$psi, SCORE1 = SKOR1, SCORE2 = SKOR2, SCORE3 = SKOR3, NBSEG = NBSEG, LOCAL1 = LOKAL1, stringsAsFactors = FALSE)
+write.table(x = outdf, file = paste0(indir, '/', samplename, '_GIS.txt'), quote = FALSE, sep = "\t", row.names = FALSE)
 
