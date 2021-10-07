@@ -41,6 +41,18 @@ msigdb_to_t2g <- function(species = 'Homo sapiens', category = NULL, subcategory
   return(t2g)
 }
 
+## Function to convert species name WIIIIP !
+### Input is an OrgDb object
+### Supported types (from, to) = 'SPECIES', 'ORGANISM, 'TAXID'
+convert_species_name <- function(OrgDb = NULL, from = 'SPECIES', to = 'ORGANISM') {
+  if (is.null(OrgDb)) stop('OrgDb is required !')
+  if (!'OrgDb' %in% is(OrgDb)) stop('OrgDb should be an OrgDb object (see AnnotationDbi::AnnotationDb) !')
+  if (from == to) stop("Parameters 'from' and 'to' are the same !")
+  org.meta <- metadata(OrgDb)
+  if (!all(c(from, to) %in% org.meta$name)) stop("Provided 'from' and 'to' parameters should be metadata of 'OrgDb' !")
+  return(org.meta[org.meta$name == from,]$value)
+}
+
 ## Function to create input objects for gsea.run() and ora.run() from an output of our rna-salmon-deseq2 pipeline
 ### . 'deseq2.res.data' : data.frame ; output table from the rna-salmon-deseq2 pipeline
 ### . 'species' : character ; species name (Homo sapiens, Mus musculus, etc ...)
@@ -62,7 +74,7 @@ table2enr <- function(deseq2.res.data = NULL, species = "Homo sapiens", geneid.c
   ## Converting non-Entrez IDs to Entrez IDs
   if (geneid.type != 'ENTREZID') {
     ## Building the gene ID conversion vector
-    gconv <- as.list(clusterProfiler::bitr(deres[[geneid.colname]], fromType=geneid.type, toType='ENTREZID', OrgDb=paste0(msigdbr2org(species), '.db')))
+    gconv <- base::as.list(clusterProfiler::bitr(deres[[geneid.colname]], fromType = geneid.type, toType = 'ENTREZID', OrgDb = paste0(msigdbr2org(species), '.db')))
     names(gconv$ENTREZID) <- gconv[[geneid.type]]
     names(gconv[[geneid.type]]) <- gconv$ENTREZID
     deres$ENTREZID <- gconv$ENTREZID[as.character(deres[[geneid.colname]])]
@@ -161,8 +173,10 @@ gsea.run <- function(geneList = NULL, func.name = 'clusterProfiler::GSEA', speci
       kegg.sp <- tolower(paste0(substr(unlist(strsplit(species, ' ')), c(1, 1), c(1,2)), collapse = ''))
       gsea.res <- gse.function(geneList = geneList, organism = kegg.sp, pvalueCutoff = pvalueCutoff, minGSSize = minGSSize, seed = seed, ...)
     } else if (species != 'Homo sapiens') stop(paste0("Function '", func.name, "' can only be used with the 'Homo sapiens' species.")) else {
-      ## OTHER (generic functions without TERM2GENE or custom parameters, like those in DOSE package)
+      ## OTHER (generic functions without TERM2GENE or custom parameters, like those in DOSE package, or clusterProfiler::gseGO)
       gsea.res <- gse.function(geneList = geneList, pvalueCutoff = pvalueCutoff, minGSSize = minGSSize, seed = seed, ...)
+      ## Tweaking setType for GO ## NO !! would break the use of clusterProfiler::simplify !!
+      # if (func.name %in% c('clusterProfiler::gseGO')) gsea.res@setType <- paste0('GO.', gsea.res@setType)
     }
   }
 
@@ -187,7 +201,8 @@ gsea.run <- function(geneList = NULL, func.name = 'clusterProfiler::GSEA', speci
 ### . 'ridgeplot' : integer of NULL ; if integer perform an enrichplot::ridgeplot() limited to a number of term corresponding to the given integer value. If null, no plot is performed.
 ### . 'cnetplot' : integer of NULL ; if integer perform an enrichplot::cnetplot() limited to a number of term corresponding to the given integer value. If null, no plot is performed.
 ### . 'emapplot' : integer of NULL ; if integer perform an enrichplot::emapplot() limited to a number of term corresponding to the given integer value. If null, no plot is performed.
-gsea.output <- function(gseaResult = NULL, comp.name = 'TEST', out.dir = getwd(), heatplot = 100, dotplot = 100, barplot = 100, gsea.plot = TRUE, ridgeplot = 100, cnetplot = 10, emapplot = 10) {
+### . 'lfc.min' : numeric ; abs(log2FoldChange) value to target as color saturation for KEGG pathview plots.
+gsea.output <- function(gseaResult = NULL, comp.name = 'TEST', out.dir = getwd(), heatplot = 100, dotplot = 100, barplot = 100, gsea.plot = TRUE, ridgeplot = 100, cnetplot = 10, emapplot = 10, lfc.min = 1) {
 
   ## Significant terms ?
   gsea.sig.tf <- gseaResult@result$p.adjust < gseaResult@params$pvalueCutoff
@@ -195,7 +210,8 @@ gsea.output <- function(gseaResult = NULL, comp.name = 'TEST', out.dir = getwd()
   if (any(gsea.sig.tf)) {
 
     ## Creating GSEA output dir
-    gsea.dir <- paste(c(out.dir, paste0('GSEA_adjp.', gseaResult@params$pvalueCutoff), gseaResult@setType), collapse = '/')
+    # gsea.dir <- paste(c(out.dir, paste0('GSEA_adjp.', gseaResult@params$pvalueCutoff), paste(c(sub(pattern = '.*::', replacement = '', x = gseaResult@setType), ...), collapse = '.')), collapse = '/')
+    gsea.dir <- paste(c(out.dir, paste0('GSEA_adjp.', gseaResult@params$pvalueCutoff), sub(pattern = '.*::', replacement = '', x = gseaResult@setType)), collapse = '/')
     dir.create(path = gsea.dir, recursive = TRUE)
 
     ## Dumping GSEA results
@@ -204,7 +220,7 @@ gsea.output <- function(gseaResult = NULL, comp.name = 'TEST', out.dir = getwd()
     ## Converting to readable symbols
     gseaResult_readable <- DOSE::setReadable(gseaResult, OrgDb = paste0(msigdbr2org(gseaResult@organism), '.db'))
     ## Writing readable table
-    write.table(gseaResult_readable@result, file = paste0(gsea.dir, '/GSEA.results_readable.txt'), quote = FALSE, sep = "\t", row.names = FALSE)
+    write.table(gseaResult_readable@result, file = paste0(gsea.dir, '/GSEA.results_readable.tsv'), quote = FALSE, sep = "\t", row.names = FALSE)
 
     ## Heatplot (needs readable)
     if (!is.null(heatplot)) {
@@ -264,7 +280,7 @@ gsea.output <- function(gseaResult = NULL, comp.name = 'TEST', out.dir = getwd()
       for (x in which(gsea.sig.tf)) {
         kegg.id <- gseaResult@result$ID[x]
         library(pathview)
-        ptry <- try(pathview::pathview(gene.data = gseaResult@geneList, pathway.id = kegg.id, species = kegg.sp, limit = list(gene=2, cpd=1), low=c("red", "blue"), high = c("cornflowerblue", "yellow"), kegg.dir = kegg.dir), silent = TRUE)
+        ptry <- try(pathview::pathview(gene.data = gseaResult@geneList, pathway.id = kegg.id, species = kegg.sp, limit = list(gene=lfc.min, cpd=1), low=c("red", "blue"), high = c("cornflowerblue", "yellow"), kegg.dir = kegg.dir), silent = TRUE)
         if(!is(ptry, class2 = 'try-error')) file.rename(from = paste0(kegg.id, '.pathview.png'), to = paste0(kegg.dir, '/', kegg.id, '.pathview.png'))
       }
     }
@@ -297,13 +313,16 @@ gsea.output <- function(gseaResult = NULL, comp.name = 'TEST', out.dir = getwd()
 ### . 'gene2Symbol' : character vector ; a named vector of EntrezIDs, with corresponding Symbol or EnsemblID as names
 ### . 'pvalueCutoff' : numeric ; minimum FDR-adjusted p-value for signficantly enriched terms (see clusterProfiler::GSEA)
 ### . 'minGSSize' : integer ; minimal size of each geneSet for analyzing (see clusterProfiler::GSEA)
-### . '...' : any other parameter to see clusterProfiler::GSEA
+### . '...' : any other parameter to the ORA function
 ora.run <- function(gene = NULL, func.name = 'clusterProfiler::enricher', species = 'Homo sapiens', t2g = NULL, t2g.name = NULL, gene2Symbol = NULL, pvalueCutoff = 5E-02, minGSSize = 10, ...) {
 
   ## Checks
   if (any(!is.character(gene))) stop("'gene' should be a character vector.")
   if (!is.character(func.name)) stop("'func.name' should be a character.")
-  if (length(gene) < minGSSize) stop("Length of 'gene' should be at least the value of 'minGSSize'.")
+  if (length(gene) < minGSSize) {
+    message("Length of 'gene' should be at least the value of 'minGSSize'.")
+    return(new(Class = 'enrichResult', pvalueCutoff = pvalueCutoff, organism = species, ontology = func.name))
+  }
   if (!is.character(species)) stop("'species' should be a character.")
   valid.species <- msigdbr::msigdbr_species()$species_name
   if (!(species %in% valid.species)) stop(paste0("Unsupported 'species'. Expecting one of : '", paste(valid.species, collapse = "', '"), '.'))
@@ -367,7 +386,8 @@ ora.run <- function(gene = NULL, func.name = 'clusterProfiler::enricher', specie
 ### . 'barplot' : integer of NULL ; if integer perform an enrichplot::barplot() limited to a number of term corresponding to the given integer value. If null, no plot is performed.
 ### . 'cnetplot' : integer of NULL ; if integer perform an enrichplot::cnetplot() limited to a number of term corresponding to the given integer value. If null, no plot is performed.
 ### . 'emapplot' : integer of NULL ; if integer perform an enrichplot::emapplot() limited to a number of term corresponding to the given integer value. If null, no plot is performed.
-ora.output <- function(enrichResult = NULL, comp.name = 'TEST', out.dir = getwd(), heatplot = 100, geneList = NULL, dotplot = 100, barplot = 100, cnetplot = 10, emapplot = 10) {
+### . 'lfc.min' : numeric ; abs(log2FoldChange) value to target as color saturation for KEGG pathview plots.
+ora.output <- function(enrichResult = NULL, comp.name = 'TEST', out.dir = getwd(), heatplot = 100, geneList = NULL, dotplot = 100, barplot = 100, cnetplot = 10, emapplot = 10, lfc.min = 1) {
 
   ## Significant terms ?
   ora.sig.tf <- enrichResult@result$p.adjust < enrichResult@pvalueCutoff
@@ -375,7 +395,9 @@ ora.output <- function(enrichResult = NULL, comp.name = 'TEST', out.dir = getwd(
   if (any(ora.sig.tf)) {
 
     ## Creating ORA output dir
-    ora.dir <- paste(c(out.dir, paste0('ORA_adjp.', enrichResult@pvalueCutoff), enrichResult@ontology), collapse = '/')
+    # ora.dir <- paste(c(out.dir, paste0('ORA_adjp.', enrichResult@pvalueCutoff), enrichResult@ontology), collapse = '/')
+    ora.dir <- paste(c(out.dir, paste0('ORA_adjp.', enrichResult@pvalueCutoff), sub(pattern = '.*::', replacement = '', x = enrichResult@ontology)), collapse = '/')
+
     dir.create(path = ora.dir, recursive = TRUE)
     
     ## Dumping ORA results
@@ -385,7 +407,7 @@ ora.output <- function(enrichResult = NULL, comp.name = 'TEST', out.dir = getwd(
     enrichResult_readable <- DOSE::setReadable(enrichResult, OrgDb = paste0(msigdbr2org(enrichResult@organism), '.db'))
     
     ## Writing readable table
-    write.table(enrichResult_readable@result, file = paste0(ora.dir, '/ORA.results_readable.txt'), quote = FALSE, sep = "\t", row.names = FALSE)
+    write.table(enrichResult_readable@result, file = paste0(ora.dir, '/ORA.results_readable.tsv'), quote = FALSE, sep = "\t", row.names = FALSE)
     
     ## Heatplot (needs readable)
     if (!is.null(heatplot) & !is.null(geneList)) {
@@ -420,7 +442,7 @@ ora.output <- function(enrichResult = NULL, comp.name = 'TEST', out.dir = getwd(
         ## Custom geneList limited to our topN signature
         cur.geneList <- geneList[enrichResult@gene2Symbol]
         library(pathview)
-        ptry <- try(suppressMessages(pathview::pathview(gene.data = cur.geneList, pathway.id = kegg.id, species = kegg.sp, limit = list(gene=2, cpd=1), low=c("red", "blue"), high = c("cornflowerblue", "yellow"), kegg.dir = kegg.dir)), silent = TRUE)
+        ptry <- try(suppressMessages(pathview::pathview(gene.data = cur.geneList, pathway.id = kegg.id, species = kegg.sp, limit = list(gene=lfc.min, cpd=1), low=c("red", "blue"), high = c("cornflowerblue", "yellow"), kegg.dir = kegg.dir)), silent = TRUE)
         if(!is(ptry, class2 = 'try-error')) file.rename(from = paste0(kegg.id, '.pathview.png'), to = paste0(kegg.dir, '/', kegg.id, '.pathview.png'))
       }
     }
@@ -457,6 +479,7 @@ ora.output <- function(enrichResult = NULL, comp.name = 'TEST', out.dir = getwd(
 # comp.name <- basename(dirname(defile))
 # species <- 'Homo sapiens'
 # my.seed <- 1337
+# lfc.min <- .5
 # de.min.p <- 5E-02
 # enr.min.p <- 5E-02
 # enr.min.genes <- 10
@@ -472,77 +495,138 @@ ora.output <- function(enrichResult = NULL, comp.name = 'TEST', out.dir = getwd(
 # msigdb.species <- as.data.frame(msigdbr::msigdbr_species())
 # 
 # ### GSEA
-for (x in seq_len(nrow(msigdb.collections))) {
-  my.collec <- unlist(msigdb.collections[x, c("gs_cat", "gs_subcat"), drop = TRUE])
-  ## Import the TERM2GENE object corresponding to the desired category/subcategory combo
-  my.t2g <- msigdb_to_t2g(species = species, category = my.collec[1], subcategory = my.collec[2])
-  my.t2g.name <- unname(if(my.collec[2] == '') my.collec[1] else paste(my.collec, collapse = "_"))
-  ## Run the GSEA
-  my.gsea.res <- gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = 'clusterProfiler::GSEA', t2g = my.t2g, t2g.name = my.t2g.name, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
-  ## Generate plots / outputs
-  gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name)
-}
+# for (x in seq_len(nrow(msigdb.collections))) {
+#   my.collec <- unlist(msigdb.collections[x, c("gs_cat", "gs_subcat"), drop = TRUE])
+#   ## Import the TERM2GENE object corresponding to the desired category/subcategory combo
+#   my.t2g <- msigdb_to_t2g(species = species, category = my.collec[1], subcategory = my.collec[2])
+#   my.t2g.name <- unname(if(my.collec[2] == '') my.collec[1] else paste(my.collec, collapse = "_"))
+#   ## Run the GSEA
+#   my.gsea.res <- gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = 'clusterProfiler::GSEA', t2g = my.t2g, t2g.name = my.t2g.name, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
+#   ## Generate plots / outputs
+#   gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name)
+# }
+# 
+# ### ORA
+# for (x in seq_len(nrow(msigdb.collections))) {
+#   my.collec <- unlist(msigdb.collections[x, c("gs_cat", "gs_subcat"), drop = TRUE])
+#   ## Import the TERM2GENE object corresponding to the desired category/subcategory combo
+#   my.t2g <- msigdb_to_t2g(species = species, category = my.collec[1], subcategory = my.collec[2])
+#   my.t2g.name <- ifelse(my.collec[2] == '', my.collec[1], paste(my.collec, collapse = "_"))
+#   ## Run the ORA
+#   my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, species = species, func.name = 'clusterProfiler::enricher', t2g = my.t2g, t2g.name = my.t2g.name, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
+#   ## Generate plots / outputs
+#   ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, geneList = enr.inputs$gsea.genevec)
+# }
+# 
+# ## DO (Disease Ontology), NCG (Network of Cancer Genes), DGN (DisGeNET)
+# ### WARNING : ONLY FOR 'Homo sapiens' !
+# 
+# ### GSEA
+# for (x in c('DOSE::gseDO', 'DOSE::gseNCG', 'DOSE::gseDGN')) {
+#   my.gsea.res <- gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = x, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
+#   gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name)
+# }
+# 
+# ### ORA
+# for (x in c('DOSE::enrichDO', 'DOSE::enrichNCG', 'DOSE::enrichDGN')) {
+#   my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, species = species, func.name = x, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
+#   ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, geneList = enr.inputs$gsea.genevec)
+# }
+# 
 
-### ORA
-for (x in seq_len(nrow(msigdb.collections))) {
-  my.collec <- unlist(msigdb.collections[x, c("gs_cat", "gs_subcat"), drop = TRUE])
-  ## Import the TERM2GENE object corresponding to the desired category/subcategory combo
-  my.t2g <- msigdb_to_t2g(species = species, category = my.collec[1], subcategory = my.collec[2])
-  my.t2g.name <- ifelse(my.collec[2] == '', my.collec[1], paste(my.collec, collapse = "_"))
-  ## Run the ORA
-  my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, species = species, func.name = 'clusterProfiler::enricher', t2g = my.t2g, t2g.name = my.t2g.name, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
-  ## Generate plots / outputs
-  ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, geneList = enr.inputs$gsea.genevec)
-}
-
-## DO (Disease Ontology), NCG (Network of Cancer Genes), DGN (DisGeNET)
-### WARNING : ONLY FOR 'Homo sapiens' !
-
+# ## GO (Gene Ontology)
+# ### This one needs some tweaking !
+# 
 ### GSEA
-for (x in c('DOSE::gseDO', 'DOSE::gseNCG', 'DOSE::gseDGN')) {
-  my.gsea.res <- gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = x, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
-  gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name)
-}
+# func.name <- 'clusterProfiler::gseGO'
+# for (x in c('BP', 'CC', 'MF')) {
+#   my.gsea.res <- gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes, OrgDb = get(paste0(msigdbr2org(species), '.db')), ont = x)
+#   my.gsea.res@setType <- paste(c(my.gsea.res@setType, x), collapse = '_')
+#   gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name)
+#   ## Simplify
+#   if(nrow(my.gsea.res) > 1) {
+#     my.gsea.res@setType <- x
+#     my.gsea.res <- enrichplot::pairwise_termsim(my.gsea.res)
+#     my.gsea.res <- clusterProfiler::simplify(my.gsea.res, cutoff = 0.7, by = "p.adjust", select_fun = min)
+#     my.gsea.res@setType <- paste(c(func.name, x, 'simplified'), collapse = '_')
+#     gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name)
+#   }
+# }
+# 
+# ### ORA
+# func.name <- 'clusterProfiler::enrichGO'
+# for (x in c('BP', 'CC', 'MF')) {
+#   my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, species = species, func.name = func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes, OrgDb = get(paste0(msigdbr2org(species), '.db')), ont = x)
+#   my.ora.res@ontology <- paste(c(my.ora.res@ontology, x), collapse = '_')
+#   ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, geneList = enr.inputs$gsea.genevec)
+#   ## Simplify
+#   if(nrow(my.ora.res) > 1) {
+#     my.ora.res@ontology <- x
+#     my.ora.res <- enrichplot::pairwise_termsim(my.ora.res)
+#     my.ora.res <- clusterProfiler::simplify(my.ora.res, cutoff = 0.7, by = "p.adjust", select_fun = min)
+#     my.ora.res@ontology <- paste(c(func.name, x, 'simplified'), collapse = '_')
+#     ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, geneList = enr.inputs$gsea.genevec)
+#   }
+# }
+# 
 
-### ORA
-for (x in c('DOSE::enrichDO', 'DOSE::enrichNCG', 'DOSE::enrichDGN')) {
-  my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, species = species, func.name = x, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
-  ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, geneList = enr.inputs$gsea.genevec)
-}
-
-## KEGG/MKEGG
-### NOTE1 : It's the same way to call the 'gsea.run' / 'ora.run' as it is for 'DO', 'NCG' or 'DGN', but here it's compatible with many more species than homo sapiens.
-### NOTE2 : for this case, additional KEGG pathway plots will be generated.
-### NOTE3 : for this case, an internet connexion is required to query the KEGG website.
-
-### GSEA
-for (x in c('clusterProfiler::gseKEGG', 'clusterProfiler::gseMKEGG')) {
-  my.gsea.res <- gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = x, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
-  gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name)
-}
-
-### ORA
-for (x in c('clusterProfiler::enrichKEGG', 'clusterProfiler::enrichMKEGG')) {
-  my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, species = species, func.name = x, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
-  ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, geneList = enr.inputs$gsea.genevec)
-}
+# ## WP (WikiPathways)
+# ### GSEA
+# func.name <- 'clusterProfiler::gseWP'
+# my.gsea.res <- gsea.run(geneList = enr.inputs$gsea.genevec, organism = species, func.name = func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
+# gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name)
+# ### ORA
+# func.name <- 'clusterProfiler::enrichWP'
+# my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, organism = species, func.name = func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
+# ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, geneList = enr.inputs$gsea.genevec)
 
 
-## CELLMARKER
-### Assess cell types from an online table
-### NOTE : It's the same way to call the 'gsea.run' / 'ora.run' functions as for MSIGDB, but with a single bank (so, no loop).
+# ## REACTOME
+# reactome.org <- tolower(convert_species_name(OrgDb = get(paste0(msigdbr2org(species = species), '.db'))))
+# ### GSEA
+# func.name <- 'ReactomePA::gsePathway'
+# my.gsea.res <- gsea.run(geneList = enr.inputs$gsea.genevec, organism = reactome.org, func.name = func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
+# my.gsea.res@setType <- paste0(func.name, '_Reactome')
+# gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name)
+# ### ORA
+# func.name <- 'ReactomePA::enrichPathway'
+# my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, organism = reactome.org, func.name = func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
+# my.ora.res@ontology <- paste0(func.name, '_Reactome')
+# ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, geneList = enr.inputs$gsea.genevec)
 
-### Import the CellMarker bank
-`%>%` <- dplyr::`%>%`
-cell_markers <- vroom::vroom('http://bio-bigdata.hrbmu.edu.cn/CellMarker/download/Human_cell_markers.txt') %>% tidyr::unite("cellMarker", tissueType, cancerType, cellName, sep=", ") %>% dplyr::select(cellMarker, geneID) %>% dplyr::mutate(geneID = strsplit(geneID, ', '))
-
-### GSEA
-my.gsea.res <- gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = 'clusterProfiler::GSEA', t2g = cell_markers, t2g.name = 'CellMarker', gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
-gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name)
-
-#### ORA
-my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, species = species, func.name = 'clusterProfiler::enricher', t2g = cell_markers, t2g.name = 'CellMarkers', gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
-ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, geneList = enr.inputs$gsea.genevec)
+# ## KEGG/MKEGG
+# ### NOTE1 : It's the same way to call the 'gsea.run' / 'ora.run' as it is for 'DO', 'NCG' or 'DGN', but here it's compatible with many more species than homo sapiens.
+# ### NOTE2 : for this case, additional KEGG pathway plots will be generated.
+# ### NOTE3 : for this case, an internet connexion is required to query the KEGG website.
+# 
+# ### GSEA
+# for (x in c('clusterProfiler::gseKEGG', 'clusterProfiler::gseMKEGG')) {
+#   my.gsea.res <- gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = x, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
+#   gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name, lfc.min = lfc.min)
+# }
+# 
+# ### ORA
+# for (x in c('clusterProfiler::enrichKEGG', 'clusterProfiler::enrichMKEGG')) {
+#   my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, species = species, func.name = x, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
+#   ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, geneList = enr.inputs$gsea.genevec, lfc.min = lfc.min)
+# }
+# 
+# 
+# ## CELLMARKER
+# ### Assess cell types from an online table
+# ### NOTE : It's the same way to call the 'gsea.run' / 'ora.run' functions as for MSIGDB, but with a single bank (so, no loop).
+# 
+# ### Import the CellMarker bank
+# `%>%` <- dplyr::`%>%`
+# cell_markers <- vroom::vroom('http://bio-bigdata.hrbmu.edu.cn/CellMarker/download/Human_cell_markers.txt') %>% tidyr::unite("cellMarker", tissueType, cancerType, cellName, sep=", ") %>% dplyr::select(cellMarker, geneID) %>% dplyr::mutate(geneID = strsplit(geneID, ', '))
+# 
+# ### GSEA
+# my.gsea.res <- gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = 'clusterProfiler::GSEA', t2g = cell_markers, t2g.name = 'CellMarker', gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
+# gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name)
+# 
+# #### ORA
+# my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, species = species, func.name = 'clusterProfiler::enricher', t2g = cell_markers, t2g.name = 'CellMarkers', gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
+# ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, geneList = enr.inputs$gsea.genevec)
 
 # 
 # ## MESH (WARNING : MEMORY OGRE AND SLOW !! Big DBs, 3 sources, 16 categories ! 64 GB of RAM required for most bases !
@@ -600,3 +684,84 @@ ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, 
 ##################
 #### TESTZONE ####
 ##################
+
+## TESTDATA
+# my.seed = 42
+# enr.min.p = .05
+# enr.min.genes = 10
+# species = 'Homo sapiens'
+# listf <- system("ls -d /home/job/WORKSPACE/B21067_LULA_03_NOMAT01/ANALYSIS/02_NOMAT01_No.CNE_HTG_PIO_NO.OL_ANALYSIS_20210928094213/DE/Clinical/Differential_analysis/adjp.0.05_lfc.0.5/*/*/", intern = TRUE)
+# for (lf in listf) {
+#   deres <- read.table(paste0(lf, '/', basename(lf), '_results.txt'), header = TRUE, sep = "\t", as.is = TRUE)
+#   enr.inputs <- table2enr(deseq2.res.data = deres, geneid.colname = 'Symbol', value.colname = 'log2FoldChange', topN.order.colname = 'padj')
+#   
+#   out.dir <- lf
+#   comp.name <- basename(lf)
+#   
+#   message(paste0(basename(dirname(lf)), '::', comp.name))
+#   ## GO (Gene Ontology)
+#   ### This one needs some tweaking !
+#   ### GSEA
+#   func.name <- 'clusterProfiler::gseGO'
+#   for (x in c('BP', 'CC', 'MF')) {
+#     message(paste0("\t", func.name, '::', x))
+#     my.gsea.res <- gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes, OrgDb = get(paste0(msigdbr2org(species), '.db')), ont = x)
+#     my.gsea.res@setType <- paste(c(my.gsea.res@setType, x), collapse = '_')
+#     gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name)
+#     ## Simplify
+#     if(nrow(my.gsea.res) > 1) {
+#       my.gsea.res@setType <- x
+#       my.gsea.res <- enrichplot::pairwise_termsim(my.gsea.res)
+#       my.gsea.res.simp <- clusterProfiler::simplify(my.gsea.res, cutoff = 0.7, by = "p.adjust", select_fun = min)
+#       if(nrow(my.gsea.res.simp) < nrow(my.gsea.res)) {
+#         my.gsea.res.simp@setType <- paste(c(func.name, x, 'simplified'), collapse = '_')
+#         gsea.output(gseaResult = my.gsea.res.simp, out.dir = out.dir, comp.name = comp.name)
+#       }
+#     }
+#   }
+#   ### ORA
+#   func.name <- 'clusterProfiler::enrichGO'
+#   for (x in c('BP', 'CC', 'MF')) {
+#     message(paste0("\t", func.name, '::', x))
+#     my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, species = species, func.name = func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes, OrgDb = get(paste0(msigdbr2org(species), '.db')), ont = x)
+#     my.ora.res@ontology <- paste(c(my.ora.res@ontology, x), collapse = '_')
+#     ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, geneList = enr.inputs$gsea.genevec)
+#     ## Simplify
+#     if(nrow(my.ora.res) > 1) {
+#       my.ora.res@ontology <- x
+#       my.ora.res <- enrichplot::pairwise_termsim(my.ora.res)
+#       my.ora.res.simp <- clusterProfiler::simplify(my.ora.res, cutoff = 0.7, by = "p.adjust", select_fun = min)
+#       if(nrow(my.ora.res.simp) < nrow(my.ora.res)) {
+#         my.ora.res.simp@ontology <- paste(c(func.name, x, 'simplified'), collapse = '_')
+#         ora.output(enrichResult = my.ora.res.simp, out.dir = out.dir, comp.name = comp.name, geneList = enr.inputs$gsea.genevec)
+#       }
+#     }
+#   }
+#   
+#   ## REACTOME
+#   reactome.org <- tolower(convert_species_name(OrgDb = get(paste0(msigdbr2org(species = species), '.db'))))
+#   ### GSEA
+#   func.name <- 'ReactomePA::gsePathway'
+#   message(paste0("\t", func.name))
+#   my.gsea.res <- gsea.run(geneList = enr.inputs$gsea.genevec, organism = reactome.org, func.name = func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
+#   my.gsea.res@setType <- paste0(func.name, '_Reactome')
+#   gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name)
+#   ### ORA
+#   func.name <- 'ReactomePA::enrichPathway'
+#   message(paste0("\t", func.name))
+#   my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, organism = reactome.org, func.name = func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
+#   my.ora.res@ontology <- paste0(func.name, '_Reactome')
+#   ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, geneList = enr.inputs$gsea.genevec)
+#   
+#   ## WP (WikiPathways)
+#   ### GSEA
+#   func.name <- 'clusterProfiler::gseWP'
+#   message(paste0("\t", func.name))
+#   my.gsea.res <- gsea.run(geneList = enr.inputs$gsea.genevec, organism = species, func.name = func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
+#   gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name)
+#   ### ORA
+#   func.name <- 'clusterProfiler::enrichWP'
+#   message(paste0("\t", func.name))
+#   my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, organism = species, func.name = func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes)
+#   ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, geneList = enr.inputs$gsea.genevec)
+# }

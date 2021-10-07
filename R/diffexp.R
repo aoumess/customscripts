@@ -2,7 +2,7 @@
 ## exp.mat                matrix(integer)     Sample x gene raw count matrix
 ## annot.df               data.frame          Sample annotations
 ## samples.colname        character           Name of the annot.df column to identify samples
-## batch.colnames         vector(character)   Name(s) of the annot.df columns to consider sources of batch effect (sequencing run, etc)
+## batch.colnames         vector(character)   Name(s) of the annot.df columns to consider sources of batch effect (sequencing run, etc) **MAX LENGTH = 2 (as supported by limma::removeBatchEffect)**
 ## factorname             vector(character)   Name(s) of the annot.df columns to consider factors on which computing the differential analysis
 ## invert.levels          logical             If TRUE, inverts the default order of levels (if the default one does not fit your biological preferences)
 ## adjp.max               0<numeric<1         BH FDR-adjusted p-value cut-off to consider differential genes as significant
@@ -13,18 +13,22 @@
 ## genes.dist.method      character           Name of the distance method to use for the hierarchical clustering of genes
 ## genes.hclust.method    character           Name of the aggregation method to use for the hierarchical clustering of genes
 ## msigdb.do              logical, logical    Use the MSigDb dataset collection to perform GSEA/ORA
-## do.do                  logical, logical    Use the Disease Ontology dataset to perform GSEA/ORA
+## go.do                  logical, logical    Use the GeneOntology dataset to perform GSEA/ORA
+## do.do                  logical, logical    Use the DiseaseOntology + CancerGeneNetwork + DisGeNet datasets to perform GSEA/ORA
 ## kegg.do                logical, logical    Use the KEGG dataset to perform GSEA/ORA
-## cellmarker.do          logical, logical    Use the CellMarker dataset to perform GSEA/ORA
+## wp.do                  logical, logical    Use the WikiPathways dataset to perform GSEA/ORA
+## reactome.do            logical, logical    Use the Reactome dataset to perform GSEA/ORA
+## cm.do                  logical, logical    Use the CellMarker dataset to perform GSEA/ORA
 ## mesh.do                logical, logical    Use the MeSHDb dataset collection to perform GSEA/ORA (warning, this may consume an astronomical amount of RAM. gsea.do is forced to false)
 ## species                character           Name of the species analyzed (namely, 'human' or 'mouse')
 ## enrp.max               0<numeric<1         BH FDR-adjusted p-value cut-off to consider enriched terms as significant
 ## enr.min.genes          numeric+            Minimum number of significant genes to perform GSEA/ORA
 ## or.top.max             numeric+            Maximum number of significant genes to consider as a signature for ORA
 ## dotplot.maxterms       numeric+            Maximum number of enriched terms to plot in a dotplot (for readability)
+## only.others            logical             When number of classes > 2, only perform "N_vs_Others" tests
 
 
-DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample", batch.colnames = NULL, factorname = NULL, invert.levels = FALSE, adjp.max = 5E-02, lfc.min = 1, lfcShrink = TRUE, outdir = getwd(), samples.dist.method = 'spearman', samples.hclust.method = 'ward.D', genes.dist.method = 'pearson', genes.hclust.method = 'ward.D', msigdb.do = c(TRUE, TRUE), do.do = c(TRUE, TRUE), kegg.do = c(TRUE, TRUE), cellmarker.do = c(TRUE, TRUE), mesh.do = c(TRUE, FALSE), species = 'Homo sapiens', enrp.max = 1E-02, enr.min.genes = 5, or.top.max = 100, dotplot.maxterms = 50, my.seed = 1337, BPPARAM = BiocParallel::SerialParam()) {
+DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample", batch.colnames = NULL, factorname = NULL, invert.levels = FALSE, adjp.max = 5E-02, lfc.min = 1, lfcShrink = TRUE, enrp.max = 1E-02, enr.min.genes = 10, or.top.max = 100, only.others = FALSE, outdir = getwd(), samples.dist.method = 'spearman', samples.hclust.method = 'ward.D', genes.dist.method = 'pearson', genes.hclust.method = 'ward.D', msigdb.do = c(TRUE, TRUE), do.do = c(TRUE, TRUE), go.do = c(TRUE, TRUE), kegg.do = c(TRUE, TRUE), wp.do = c(TRUE, TRUE), reactome.do = c(TRUE, TRUE), cm.do = c(TRUE, TRUE), mesh.do = c(FALSE, FALSE), non.redundent = TRUE, species = 'Homo sapiens', dotplot.maxterms = 50, my.seed = 1337, BPPARAM = BiocParallel::SerialParam()) {
   
   if (tolower(species) == 'homo sapiens') {
     Org <- 'org.Hs'
@@ -61,7 +65,7 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
   suppressPackageStartupMessages(library(circlize))
   
   ## Loading CellMarker db if needed
-  if (any(cellmarker.do)) {
+  if (any(cm.do)) {
     `%>%` <- dplyr::`%>%`
     cell_markers <- vroom::vroom('http://bio-bigdata.hrbmu.edu.cn/CellMarker/download/Human_cell_markers.txt') %>% tidyr::unite("cellMarker", tissueType, cancerType, cellName, sep=", ") %>% dplyr::select(cellMarker, geneID) %>% dplyr::mutate(geneID = strsplit(geneID, ', '))
   }
@@ -99,8 +103,14 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
     if(length(mylevels) > 2) {
       XvsO.combz <- sapply(as.character(mylevels), function(x) { list(x, mylevels[!mylevels == x])}, simplify = FALSE)
       names(XvsO.combz) <- vapply(mylevels, function(x) { paste0(x, '_vs_Other') }, 'a')
-      all.combz <- c(all.combz, XvsO.combz)
+      all.combz <- if(only.others) XvsO.combz else c(all.combz, XvsO.combz)
       rm(XvsO.combz)
+    }
+    
+    ## Filtering comparisons with a class comprised by an unique sample
+    for (mycomb in names(all.combz)) {
+      class.len <- vapply(all.combz[[mycomb]], function(x) { length(which(cur.annot.df[[cur.fac]] %in% x))}, 1L)
+      if(any(class.len == 1)) all.combz[[mycomb]] <- NULL
     }
     
     ## Creating design (factor then Batch, w/o intercept)
@@ -126,10 +136,9 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
     ### Removing batch effect if needed
     if (!is.null(batch.colnames)) {
       batch2.name <- if (length(batch.colnames) > 1) batch.colnames[2] else NULL
-  norm.mat <- limma::removeBatchEffect(x = norm.mat, batch = SummarizedExperiment::colData(DE2obj)[[batch.colnames[1]]], batch2 = batch2.name)
+      norm.mat <- limma::removeBatchEffect(x = norm.mat, batch = SummarizedExperiment::colData(DE2obj)[[batch.colnames[1]]], batch2 = batch2.name)
     }
-    rm(DE2obj.norm)
-    
+
     ### PCAs
     for (p in c(cur.fac, batch.colnames)) {
       png(filename = paste0(factor.dir, '/PCA_vst_', p, '.png'), width = 1024, height = 1000)
@@ -289,13 +298,20 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
       }
       
       ## Functional enrichment
-      if (any(msigdb.do, kegg.do, do.do, cellmarker.do, mesh.do) & length(which(deg.idx)) >= enr.min.genes & !is.null(species)) {
+      if (any(msigdb.do, kegg.do, do.do, go.do, cm.do, wp.do, reactome.do, mesh.do) & length(which(deg.idx)) >= enr.min.genes & !is.null(species)) {
         
         enr.inputs <- table2enr(deseq2.res.data = DEres.df, species = species, geneid.colname = 'Symbol', geneid.type = 'SYMBOL', value.colname = 'log2FoldChange', topN.max = or.top.max, topN.order.colname = 'padj', topN.order.decreasing = FALSE, topN.cutoff = enrp.max, topN.keep.operator = '<')
         
         ## MSIGDB
         if (any(msigdb.do)) {
           msigdb.collec <- as.data.frame(msigdbr::msigdbr_collections())
+          ## Removing redundancy when requested
+          if(non.redundant) {
+            if (any(go.do)) msigdb.collec <- msigdb.collec[-c(grep(pattern = 'GO\\:', x = msigdb.collec$gs_subcat)),]
+            if (any(wp.do)) msigdb.collec <- msigdb.collec[-c(grep(pattern = 'WIKIPATHWAYS', x = msigdb.collec$gs_subcat)),]
+            if (any(reactome.do)) msigdb.collec <- msigdb.collec[-c(grep(pattern = 'REACTOME', x = msigdb.collec$gs_subcat)),]
+            if (any(kegg.do)) msigdb.collec <- msigdb.collec[-c(grep(pattern = 'KEGG', x = msigdb.collec$gs_subcat)),]
+          }
           for (mx in seq_len(nrow(msigdb.collec))) {
             msc <- if(msigdb.collec[mx,2] == '') msigdb.collec[mx,1] else paste(c(msigdb.collec[mx,1], msigdb.collec[mx,2]), collapse = '_')
             ## Import the TERM2GENE object corresponding to the desired category/subcategory combo
@@ -315,7 +331,53 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
           }
         }
         
-        ## DO
+        ## GO (gene ontology)
+        if (any(go.do)) {
+          ### GSEA
+          if(go.do[1]) {
+            func.name <- 'clusterProfiler::gseGO'
+            for (x in c('BP', 'CC', 'MF')) {
+              my.gsea.res <- try(gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enrp.max, minGSSize = enr.min.genes, OrgDb = get(paste0(msigdbr2org(species), '.db')), ont = x))
+              if (!is(my.gsea.res, class2 = 'try-error')) {
+                my.gsea.res@setType <- paste(c(my.gsea.res@setType, x), collapse = '_')
+                gsea.output(gseaResult = my.gsea.res, out.dir = de.dir, comp.name = mycomb)
+                ## Simplify
+                if(nrow(my.gsea.res) > 1) {
+                  my.gsea.res@setType <- x
+                  my.gsea.res <- enrichplot::pairwise_termsim(my.gsea.res)
+                  my.gsea.res.simp <- clusterProfiler::simplify(my.gsea.res, cutoff = 0.7, by = "p.adjust", select_fun = min)
+                  if(nrow(my.gsea.res.simp) < nrow(my.gsea.res)) {
+                    my.gsea.res.simp@setType <- paste(c(func.name, x, 'simplified'), collapse = '_')
+                    gsea.output(gseaResult = my.gsea.res.simp, out.dir = de.dir, comp.name = mycomb)
+                  }
+                }
+              }
+            }
+          }
+          ### ORA
+          if(go.do[2]) {
+            func.name <- 'clusterProfiler::enrichGO'
+            for (x in c('BP', 'CC', 'MF')) {
+              my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, species = species, func.name = func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enrp.max, minGSSize = enr.min.genes, OrgDb = get(paste0(msigdbr2org(species), '.db')), ont = x)
+              if (!is(my.ora.res, class2 = 'try-error')) {
+                my.ora.res@ontology <- paste(c(my.ora.res@ontology, x), collapse = '_')
+                ora.output(enrichResult = my.ora.res, out.dir = de.dir, comp.name = mycomb, geneList = enr.inputs$gsea.genevec)
+                ## Simplify
+                if(nrow(my.ora.res) > 1) {
+                  my.ora.res@ontology <- x
+                  my.ora.res <- enrichplot::pairwise_termsim(my.ora.res)
+                  my.ora.res.simp <- clusterProfiler::simplify(my.ora.res, cutoff = 0.7, by = "p.adjust", select_fun = min)
+                  if(nrow(my.ora.res.simp) < nrow(my.ora.res)) {
+                    my.ora.res.simp@ontology <- paste(c(func.name, x, 'simplified'), collapse = '_')
+                    ora.output(enrichResult = my.ora.res.simp, out.dir = de.dir, comp.name = mycomb, geneList = enr.inputs$gsea.genevec)
+                  }
+                }
+              }
+            }
+          }
+        }
+        
+        ## DO (disease ontology)
         if (any(do.do)) {
           ### GSEA
           if (do.do[1]) {
@@ -354,17 +416,52 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
           }
         }
         
+        ## WP (wikipathways)
+        if(any(wp.do)) { 
+          if(wp.do[1]) {
+            ### GSEA
+            func.name <- 'clusterProfiler::gseWP'
+            my.gsea.res <- try(gsea.run(geneList = enr.inputs$gsea.genevec, organism = species, func.name = func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enrp.max, minGSSize = enr.min.genes))
+            if (!is(my.gsea.res, class2 = 'try-error')) gsea.output(gseaResult = my.gsea.res, out.dir = de.dir, comp.name = mycomb)
+          }
+          ### ORA
+          if(wp.do[2]) {
+            func.name <- 'clusterProfiler::enrichWP'
+            my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, organism = species, func.name = func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enrp.max, minGSSize = enr.min.genes)
+            if (!is(my.ora.res, class2 = 'try-error')) ora.output(enrichResult = my.ora.res, out.dir = de.dir, comp.name = mycomb, geneList = enr.inputs$gsea.genevec)
+          }
+        }
+        
+        ## REACTOME
+        if (any(reactome.do)) {
+          reactome.org <- tolower(convert_species_name(OrgDb = get(paste0(msigdbr2org(species = species), '.db'))))
+          if(reactome.do[1]) {
+            ### GSEA
+            func.name <- 'ReactomePA::gsePathway'
+            my.gsea.res <- gsea.run(geneList = enr.inputs$gsea.genevec, organism = reactome.org, func.name = func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enrp.max, minGSSize = enr.min.genes)
+            my.gsea.res@setType <- paste0(func.name, '_Reactome')
+            gsea.output(gseaResult = my.gsea.res, out.dir = de.dir, comp.name = mycomb)
+          }
+          if(reactome.do[2]) {
+            ### ORA
+            func.name <- 'ReactomePA::enrichPathway'
+            my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, organism = reactome.org, func.name = func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enrp.max, minGSSize = enr.min.genes)
+            my.ora.res@ontology <- paste0(func.name, '_Reactome')
+            ora.output(enrichResult = my.ora.res, out.dir = de.dir, comp.name = mycomb, geneList = enr.inputs$gsea.genevec)
+          }
+        }
+        
         ## CELLMARKER
         ### Assess cell types from an online table
         ### NOTE : It's the same way to call the 'gsea.run' / 'ora.run' functions as for MSIGDB, but with a single bank (so, no loop).
-        if (any(cellmarker.do)) {
+        if (any(cm.do)) {
           ### GSEA
-          if (cellmarker.do[1]) {
+          if (cm.do[1]) {
             my.gsea.res <- try(gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = 'clusterProfiler::GSEA', t2g = cell_markers, t2g.name = 'CellMarker', gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enrp.max, minGSSize = enr.min.genes))
             if (!is(my.gsea.res, class2 = 'try-error')) gsea.output(gseaResult = my.gsea.res, out.dir = de.dir, comp.name = mycomb)
           }
           #### ORA
-          if (cellmarker.do[2]) {
+          if (cm.do[2]) {
             my.ora.res <- try(ora.run(gene = enr.inputs$ora.genevec, species = species, func.name = 'clusterProfiler::enricher', t2g = cell_markers, t2g.name = 'CellMarkers', gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enrp.max, minGSSize = enr.min.genes))
             if (!is(my.ora.res, class2 = 'try-error')) ora.output(enrichResult = my.ora.res, out.dir = de.dir, comp.name = mycomb, geneList = enr.inputs$gsea.genevec)
           }
