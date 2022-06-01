@@ -1,9 +1,93 @@
+## Function to assess the weight of annotation covariates in a (sample x annotations) data.frame, on a (feature x sample) data matrix, through correlation (for a continuous covariate) or Kruskal-Wallis statistic (for factors)
+## . mat                [f x s num matrix]      A normalized numeric matrix
+## . annot.df           [s x a data.frame]      A data.frame with covariates as columns (numeric or factor)
+## . factor.names       [vec(char)]             Column names of annot.df corresponding to factor covariates
+## . conti.colnames     [vec(char)]             Column names of annot.df corresponding to contiunous covariates
+## . red.method         [char]                  Dimension reduction method ['PCA', 'MDS']
+## . ndim.max           [int>0]                 Number of dimensions to compute and plot
+## . center             [bool]                  Center mat ?
+## . scale              [bool]                  Scale mat ?
+## . coef.cut           [0<=num<1]              Do not display coefficients inferior to this value on the heatmap
+## . color.palette      [vec(col)]              Color vector (length 2) for the heatmap
+## . out.file           [char]                  Output PNG file name (and path)
+assess.covar <- function(mat = NULL, annot.df = NULL, factor.names = NULL, conti.names = NULL, red.method = 'pca', ndim.max = 10, center = TRUE, scale = TRUE, coef.cut = 0, color.palette = c("white", "orangered3"), out.file = paste0(getwd(), '/Assess_covariates.png')) {
+  # message('POUET')
+  # message(ncol(mat))
+  # message(ndim.max)
+  ## Checks
+  ### Mandatory
+  if (is.null(mat)) stop('A (f feature by s sample) matrix [mat] is required.')
+  if (is.null(annot.df)) stop('An annotation data.frame [annot.df] is required.')
+  if (all(is.null(c(factor.names, conti.names)))) stop('At least one of [factor.names] or [conti.colnames] should not be NULL.')
+  if (ndim.max <= 0) stop('[ndim.max] should be a non-null positive integer (and <= s samples).')
+  if (!dir.exists(dirname(out.file))) stop('Path to [out.file] does not exist.')
+  if (!tolower(red.method) %in% c('pca', 'mds.euc', 'mds.spear')) stop('Unknown reduction method')
+  ### Compatibility
+  if (ndim.max > ncol(mat)) {
+    message('WARNING : requested [ndim.max] is higher than samples in [mat]. Reducing it to [mat] samples.')
+    ndim.max <- ncol(mat)-1
+  }
+  # message(ndim.max)
+  if (nrow(annot.df) != ncol(mat)) stop('There should be the same number of samples in [mat] (columns) and [annot.df] (rows)')
+  if(!is.null(factor.names)) {
+    if(!all(factor.names %in% colnames(annot.df))) stop('All [factor.names] should be in colnames of [annot.df].')
+  }
+  if(!is.null(conti.names)) {
+    if(!all(conti.names %in% colnames(annot.df))) stop('All [conti.names] should be in colnames of [annot.df].')
+  }
+  ## RUN
+  ## Center / scale ?
+  if (any(c(center, scale))) mat <- base::scale(x = mat, center = center, scale = scale)
+  ## Dimension reduction
+  if (tolower(red.method) == 'pca') norm.red <- base::svd(x = mat, nv = ndim.max)$v
+  if (tolower(red.method) == 'mds.euc') norm.red <- stats::cmdscale(d = dist(x = t(mat), method = 'euclidean'), k = ndim.max)
+  if (tolower(red.method) == 'mds.spear') norm.red <- stats::cmdscale(d = as.dist(1-cor(mat, method = 'spearman')), k = ndim.max)
+  col.names <- c(factor.names, conti.names)
+  col.types <- c(rep('factor', length(factor.names)), rep('continuous', length(conti.names)))
+  ## Setting output matrix
+  bc.mat <- matrix(NA, ncol = length(col.names), nrow = ndim.max, dimnames = list(paste0(toupper(red.method), seq_len(ndim.max)), col.names))
+  ## Filling matrix
+  for (cn in seq_along(col.names)) {
+    # message(col.names[cn])
+    if (col.names[cn] %in% conti.names) {
+      cv2cor <- annot.df[[col.names[cn]]]
+      nona <- !is.na(cv2cor)
+      bc.mat[, cn] <-  abs(cor(x = cv2cor[nona], y = norm.red[nona,], method = 'spearman'))
+    } else if (col.names[cn] %in% factor.names & length(unique(annot.df[[col.names[cn]]])) > 1) {
+      b2kw <- annot.df[[col.names[cn]]]
+      nona <- !is.na(b2kw)
+      for (si in seq_len(ndim.max)) {
+        bc.mat[si,cn] <- kruskal.test(x = norm.red[nona,si], g = as.factor(b2kw[nona]))$statistic / nrow(norm.red)
+      }
+    }
+  }
+  bc.mat[bc.mat < coef.cut] <- 0
+  ## Heatmap
+  myRamp.col <- circlize::colorRamp2(c(0, 1), color.palette)
+  BC.hm <- ComplexHeatmap::Heatmap(matrix = bc.mat,
+                                   name = 'Weight',
+                                   col = myRamp.col,
+                                   na_col = 'grey75',
+                                   cluster_rows = FALSE,
+                                   cluster_columns = FALSE,
+                                   rect_gp = grid::gpar(col = "darkgrey", lwd=0.5),
+                                   column_title = 'Batch factors and covariates weight on dataset',
+                                   row_title = 'SVD dimensions',
+                                   column_split = col.types,
+                                   top_annotation = ComplexHeatmap::HeatmapAnnotation(Type = col.types, col = list(Type = setNames(object = c('lightblue','pink'), nm = c('factor', 'continuous')))))
+  png(filename = out.file, width = 800, heigh = 1000)
+  ComplexHeatmap::draw(BC.hm)
+  dev.off()
+}
+
+
+
 ## Perform DE analysis & functional enrichment for contrasts in pairs
 ## exp.mat                matrix(integer)     Sample x gene raw count matrix
 ## annot.df               data.frame          Sample annotations
 ## samples.colname        character           Name of the annot.df column to identify samples
-## batch.colnames         vector(character)   Name(s) of the annot.df columns to consider sources of batch effect (sequencing run, etc) **MAX LENGTH = 2 (as supported by limma::removeBatchEffect)**
-## factorname             vector(character)   Name(s) of the annot.df columns to consider factors on which computing the differential analysis
+## covar.colnames         vector(character)   Name(s) of the annot.df columns to consider as covariates (by ex, sources of batch effect) to remove through regression. WARNING : category-based covariates HAVE TO BE given as factors. If they are provided as characters, they WILL BE DISCARDED. For regression at the matrix level (for clustering, heatmap) through limma::removeBatchEffect, only the first 2 factors will be used. There is no limit for continuous covariates.
+## condition.colnames     vector(character)   Name(s) of the annot.df columns to consider as conditins on which computing the differential analysis. It/they should contain factors
 ## invert.levels          logical             If TRUE, inverts the default order of levels (if the default one does not fit your biological preferences)
 ## adjp.max               0<numeric<1         BH FDR-adjusted p-value cut-off to consider differential genes as significant
 ## lfc.min                numeric+            Minimal logFoldChange to consider differential genes
@@ -12,23 +96,26 @@
 ## samples.hclust.method  character           Name of the aggregation method to use for the hierarchical clustering of samples
 ## genes.dist.method      character           Name of the distance method to use for the hierarchical clustering of genes
 ## genes.hclust.method    character           Name of the aggregation method to use for the hierarchical clustering of genes
-## msigdb.do              logical, logical    Use the MSigDb dataset collection to perform GSEA/ORA
-## go.do                  logical, logical    Use the GeneOntology dataset to perform GSEA/ORA
-## do.do                  logical, logical    Use the DiseaseOntology + CancerGeneNetwork + DisGeNet datasets to perform GSEA/ORA
-## kegg.do                logical, logical    Use the KEGG dataset to perform GSEA/ORA
-## wp.do                  logical, logical    Use the WikiPathways dataset to perform GSEA/ORA
-## reactome.do            logical, logical    Use the Reactome dataset to perform GSEA/ORA
-## cm.do                  logical, logical    Use the CellMarker dataset to perform GSEA/ORA
-## mesh.do                logical, logical    Use the MeSHDb dataset collection to perform GSEA/ORA (warning, this may consume an astronomical amount of RAM. gsea.do is forced to false)
+## msigdb.do              c(bool, bool)       Use the MSigDb dataset collection to perform GSEA/ORA
+## go.do                  c(bool, bool)       Use the GeneOntology dataset to perform GSEA/ORA
+## do.do                  c(bool, bool)       Use the DiseaseOntology + CancerGeneNetwork + DisGeNet datasets to perform GSEA/ORA
+## kegg.do                c(bool, bool)       Use the KEGG dataset to perform GSEA/ORA
+## wp.do                  c(bool, bool)       Use the WikiPathways dataset to perform GSEA/ORA
+## reactome.do            c(bool, bool)       Use the Reactome dataset to perform GSEA/ORA
+## cm.do                  c(bool, bool)       Use the CellMarker dataset to perform GSEA/ORA
+## mesh.do                c(bool, bool)       Use the MeSHDb dataset collection to perform GSEA/ORA (warning, this may consume an astronomical amount of RAM. gsea.do is forced to false)
+## non.redundant          bool                If any of go.do|kegg.do|wp.do|reactome.do AND msigdb.do are TRUE, discard outputing corresponding versions of the former in MSigDb (as they are corresponding to older, smaller bases)
 ## species                character           Name of the species analyzed (namely, 'human' or 'mouse')
 ## enrp.max               0<numeric<1         BH FDR-adjusted p-value cut-off to consider enriched terms as significant
 ## enr.min.genes          numeric+            Minimum number of significant genes to perform GSEA/ORA
-## or.top.max             numeric+            Maximum number of significant genes to consider as a signature for ORA
+## or.top.max             numeric+            Maximum number of significant genes to consider as a signature for ORA. Also used for plots (boxplots, limited heatmap) using only a portion of all significant genes
 ## dotplot.maxterms       numeric+            Maximum number of enriched terms to plot in a dotplot (for readability)
-## only.others            logical             When number of classes > 2, only perform "N_vs_Others" tests
-
-
-DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample", batch.colnames = NULL, factorname = NULL, invert.levels = FALSE, adjp.max = 5E-02, lfc.min = 1, lfcShrink = TRUE, enrp.max = 1E-02, enr.min.genes = 10, or.top.max = 100, only.others = FALSE, outdir = getwd(), samples.dist.method = 'spearman', samples.hclust.method = 'ward.D', genes.dist.method = 'pearson', genes.hclust.method = 'ward.D', msigdb.do = c(TRUE, TRUE), do.do = c(TRUE, TRUE), go.do = c(TRUE, TRUE), kegg.do = c(TRUE, TRUE), wp.do = c(TRUE, TRUE), reactome.do = c(TRUE, TRUE), cm.do = c(TRUE, TRUE), mesh.do = c(FALSE, FALSE), non.redundent = TRUE, species = 'Homo sapiens', dotplot.maxterms = 50, my.seed = 1337, BPPARAM = BiocParallel::SerialParam()) {
+## only.others            bool                When number of classes > 2 in the tested condition, only perform "N_vs_Others" tests and not all combinations
+## my.seed                numeric             Seed value for RNG (used for GSEA and heatmap annotation colors)
+## boxplots               bool                If TRUE, draw boxplots of or.top.max genes
+## save.wald              bool                If TRUE, save the DESeq2 object containing the results of the Wald test. This is FALSE by default, as the resulting object can be pretty big.
+## color.palette          vec(color)          Vector of 3 colors used for the expression heatmap (lower values, middle, higher)
+DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample", covar.colnames = NULL, condition.colnames = NULL, invert.levels = FALSE, adjp.max = 5E-02, lfc.min = 1, lfcShrink = TRUE, enrp.max = 1E-02, enr.min.genes = 10, or.top.max = 100, only.others = FALSE, outdir = getwd(), samples.dist.method = 'spearman', samples.hclust.method = 'ward.D', genes.dist.method = 'spearman', genes.hclust.method = 'ward.D', msigdb.do = c(TRUE, TRUE), do.do = c(TRUE, TRUE), go.do = c(TRUE, TRUE), kegg.do = c(TRUE, TRUE), wp.do = c(TRUE, TRUE), reactome.do = c(TRUE, TRUE), cm.do = c(TRUE, TRUE), mesh.do = c(FALSE, FALSE), non.redundant = TRUE, species = 'Homo sapiens', dotplot.maxterms = 50, my.seed = 1234L, boxplots = TRUE, save.wald = FALSE, heatmap.palette = c("royalblue3", "ivory", "orangered3"), BPPARAM = BiocParallel::SerialParam()) {
   
   if (tolower(species) == 'homo sapiens') {
     Org <- 'org.Hs'
@@ -36,24 +123,23 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
     Org <- 'org.Mm'
   } else stop("Only 'Homo sapiens' and 'Mus musculus' species are supported !")
   
-  # message(cur.fac)
+  # message(cur.cond)
   
   ## CHECKS
   ## if exp.mat and annot.df have different size
   if (nrow(annot.df) != ncol(exp.mat)) stop("'exp.mat' and 'annot.df' do not have the same amount of samples!")
   ## if samples.colname does not exist
   if (!samples.colname %in% colnames(annot.df)) stop(paste0("Sample column '", samples.colname, "' not found !"))
-  ## if any of batch.colnames does not exist
-  if (!all(batch.colnames %in% colnames(annot.df))) stop("Some of batch column name(s) not found !")
-  ## if cur.fac does not exist
-  factn.check <- factorname %in% colnames(annot.df)
+  ## if any of covar.colnames does not exist
+  if (!all(covar.colnames %in% colnames(annot.df))) stop("Some of batch column name(s) not found !")
+  ## if cur.cond does not exist
+  factn.check <- condition.colnames %in% colnames(annot.df)
   if (!any(factn.check)) stop('None of the factor name(s) were found in the annotation table !')
   if (!all(factn.check)) {
-    out.factn <- factorname[!factn.check]
-    factorname <- factorname[factn.check]
+    out.factn <- condition.colnames[!factn.check]
+    condition.colnames <- condition.colnames[factn.check]
     message(paste0('Some factor name(s) [', paste(out.factn, collapse = ', '), '] were not found in the annotation table, thus discarded'))
   }
-  
   ## if samples are not identical
   exp.mat <- exp.mat[,order(colnames(exp.mat))]
   annot.df <- annot.df[order(annot.df[[samples.colname]]),]
@@ -67,36 +153,37 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
   ## Loading CellMarker db if needed
   if (any(cm.do)) {
     `%>%` <- dplyr::`%>%`
-    cell_markers <- vroom::vroom('http://bio-bigdata.hrbmu.edu.cn/CellMarker/download/Human_cell_markers.txt') %>% tidyr::unite("cellMarker", tissueType, cancerType, cellName, sep=", ") %>% dplyr::select(cellMarker, geneID) %>% dplyr::mutate(geneID = strsplit(geneID, ', '))
+    cm.filename <- if (tolower(species) == 'homo sapiens') 'Human_cell_markers.txt' else if (tolower(species) == 'mus musculus') 'Mouse_cell_markers.txt'
+    cell_markers <- vroom::vroom(paste0('http://bio-bigdata.hrbmu.edu.cn/CellMarker/download/', cm.filename)) %>% tidyr::unite("cellMarker", tissueType, cancerType, cellName, sep=", ") %>% dplyr::select(cellMarker, geneID) %>% dplyr::mutate(geneID = strsplit(geneID, ', '))
   }
   
   ## Looping on factor names
-  for (cur.fac in factorname) {
+  for (cur.cond in condition.colnames) {
     
     ## Limiting annot.df to required columns
-    cur.annot.df <- annot.df[, colnames(annot.df) %in% c(samples.colname, batch.colnames, cur.fac)]
+    cur.annot.df <- annot.df[, colnames(annot.df) %in% c(samples.colname, covar.colnames, cur.cond)]
     cur.exp.mat <- exp.mat
     cur.annot.df <- annot.df
     ## Adjusting the datasets if needed (handling NAs in annotation)
-    na.check <- is.na(cur.annot.df[[cur.fac]])
+    na.check <- is.na(cur.annot.df[[cur.cond]])
     if (any(na.check)) {
       cur.exp.mat <- cur.exp.mat[,!na.check]
       cur.annot.df <- cur.annot.df[!na.check,]
     }
     
     ## Forcing a relevel (if some levels were lost)
-    levtab <- as.data.frame(table(cur.annot.df[[cur.fac]]), stringsAsFactors = FALSE)
+    levtab <- as.data.frame(table(cur.annot.df[[cur.cond]]), stringsAsFactors = FALSE)
     levtab <- levtab[order(levtab$Var1),]
     levtab <- levtab[levtab$Freq > 0,]
-    cur.annot.df[[cur.fac]] <- as.factor(as.character(cur.annot.df[[cur.fac]]))
-    myref <- levels(cur.annot.df[[cur.fac]])[1]
-    cur.annot.df[[cur.fac]] <- relevel(cur.annot.df[[cur.fac]], ref = myref)
+    cur.annot.df[[cur.cond]] <- as.factor(as.character(cur.annot.df[[cur.cond]]))
+    myref <- levels(cur.annot.df[[cur.cond]])[1]
+    cur.annot.df[[cur.cond]] <- relevel(cur.annot.df[[cur.cond]], ref = myref)
     
     ## Filtering special characters
-    levels(cur.annot.df[[cur.fac]]) <- gsub(pattern = "\\W", replacement = '.', x = levels(cur.annot.df[[cur.fac]]))
+    levels(cur.annot.df[[cur.cond]]) <- gsub(pattern = "\\W", replacement = '.', x = levels(cur.annot.df[[cur.cond]]))
     
     ## Preparing the table list of all combinations
-    mylevels <- levels(cur.annot.df[[cur.fac]])
+    mylevels <- levels(cur.annot.df[[cur.cond]])
     combn.res <- if(invert.levels) combn(mylevels, 2) else combn(rev(mylevels), 2)
     all.combz <- sapply(1:ncol(combn.res), function(x) {list(combn.res[1,x], combn.res[2,x])}, simplify = FALSE)
     names(all.combz) <- vapply(1:ncol(combn.res), function(x) { paste(combn.res[, x, drop = TRUE], collapse = '_vs_') }, 'a')
@@ -109,12 +196,12 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
     
     ## Filtering comparisons with a class comprised by an unique sample
     for (mycomb in names(all.combz)) {
-      class.len <- vapply(all.combz[[mycomb]], function(x) { length(which(cur.annot.df[[cur.fac]] %in% x))}, 1L)
+      class.len <- vapply(all.combz[[mycomb]], function(x) { length(which(cur.annot.df[[cur.cond]] %in% x))}, 1L)
       if(any(class.len == 1)) all.combz[[mycomb]] <- NULL
     }
     
     ## Creating design (factor then Batch, w/o intercept)
-    my.textform <- paste(c('~0', unique(c(cur.fac, batch.colnames))), collapse = '+')
+    my.textform <- paste(c('~0', unique(c(cur.cond, covar.colnames))), collapse = '+')
     my.design <- as.formula(my.textform)
     
     ## Creating the main output dir
@@ -127,20 +214,44 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
     rm(cur.exp.mat, cur.annot.df)
     
     ## Saving the DESeq object
-    saveRDS(object = DE2obj, file = paste0(factor.dir, '/', cur.fac, '_rawcounts.RDS'), compress = 'bzip2')
+    saveRDS(object = DE2obj, file = paste0(factor.dir, '/', cur.cond, '_rawcounts.RDS'), compress = 'bzip2')
     
     ## Normalizing by vst (for heatmap only)
     DE2obj.norm <- DESeq2::vst(object = DE2obj, blind = TRUE)
     norm.mat <- SummarizedExperiment::assay(DE2obj.norm)
     rm(DE2obj.norm)
-    ### Removing batch effect if needed
-    if (!is.null(batch.colnames)) {
-      batch2.name <- if (length(batch.colnames) > 1) batch.colnames[2] else NULL
-      norm.mat <- limma::removeBatchEffect(x = norm.mat, batch = SummarizedExperiment::colData(DE2obj)[[batch.colnames[1]]], batch2 = batch2.name)
+    
+    ## Assessing covariates, and regressing if requested
+    if (!is.null(covar.colnames)) {
+      ### Assessing covariates
+      #### Splitting factor and continuous covariates
+      factor.colnames <- conti.colnames <- NULL
+      for (cn in covar.colnames) if (is.factor(DE2obj@colData[[cn]])) factor.colnames <- c(factor.colnames, cn) else if (is.numeric(DE2obj@colData[[cn]])) conti.colnames <- c(conti.colnames, cn) else stop(paste0('Covariate [', cn, '] is neither a factor nor a numeric/integer vector !'))
+      #### Assessing covariates
+      assess.covar(mat = norm.mat, annot.df = as.data.frame(DE2obj@colData), factor.names = c(cur.cond, factor.colnames), conti.names = conti.colnames, red.method = 'pca', ndim.max = round(ncol(norm.mat)/2), center = TRUE, scale = TRUE, out.file = paste0(factor.dir, '/', cur.cond, '_assess_covariates_01_unregressed.png'))
+      #### Running limma::removeBatchEffect the good way
+      limma.bc.batch2 <- limma.bc.batch1 <- limma.bc.covar <- NULL
+      ##### Handling factor covariates
+      for (fc in factor.colnames) {
+        if (is.null(limma.bc.batch1)) limma.bc.batch1 <- DE2obj@colData[[fc]] else if (is.null(limma.bc.batch2)) limma.bc.batch2 <- DE2obj@colData[[fc]] else message(paste0('Factor [', fc, '] will not be considered for matrix regression by limma::removeBatchEffect as ony 2 factors can be used.'))
+      }
+      ##### Handling continuous covariates
+      for (cc in conti.colnames) {
+        if (is.null(limma.bc.covar)) limma.bc.covar <- as.matrix(DE2obj@colData[, cc, drop = FALSE]) else limma.bc.covar <- cbind(limma.bc.covar, as.matrix(DE2obj@colData[, cc, drop = FALSE]))
+      }
+      # for (bc in covar.colnames) {
+      #   if (is.factor(DE2obj@colData[[bc]])) {
+      #     if (is.null(limma.bc.batch1)) limma.bc.batch1 <- DE2obj@colData[[bc]] else if (is.null(limma.bc.batch2)) limma.bc.batch2 <- DE2obj@colData[[bc]]
+      #   } else if (is.null(limma.bc.covar)) limma.bc.covar <- as.matrix(DE2obj@colData[, bc, drop = FALSE]) else limma.bc.covar <- cbind(limma.bc.covar, as.matrix(DE2obj@colData[, bc, drop = FALSE]))
+      # }
+      norm.mat <- limma::removeBatchEffect(x = norm.mat, batch = limma.bc.batch1, batch2 = limma.bc.batch2, covariates = limma.bc.covar, design = model.matrix(as.formula(paste0('~0+', cur.cond)), data = DE2obj@colData))
+      
+      ### Assessing covariates (after regression)
+      assess.covar(mat = norm.mat, annot.df = as.data.frame(DE2obj@colData), factor.names = c(cur.cond, factor.colnames), conti.names = conti.colnames, red.method = 'pca', ndim.max = round(ncol(norm.mat)/2), center = TRUE, scale = TRUE, out.file = paste0(factor.dir, '/', cur.cond, '_assess_covariates_02_regressed.png'))
     }
-
+    
     ### PCAs
-    for (p in c(cur.fac, batch.colnames)) {
+    for (p in c(cur.cond, covar.colnames)) {
       png(filename = paste0(factor.dir, '/PCA_vst_', p, '.png'), width = 1024, height = 1000)
       library(ggfortify)
       print(ggplot2::autoplot(prcomp(t(norm.mat)), data = as.data.frame(SummarizedExperiment::colData(DE2obj)), colour = p, size = 3))
@@ -151,20 +262,20 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
     htg.de.wald <- DESeq2::DESeq(DE2obj)
     
     ## Saving the Wald test DESeq object
-    saveRDS(object = htg.de.wald, file = paste0(factor.dir, '/', cur.fac, '_wald.RDS'), compress = 'bzip2')
+    if(save.wald) saveRDS(object = htg.de.wald, file = paste0(factor.dir, '/', cur.cond, '_wald.RDS'), compress = 'bzip2')
     
     ## LOOPING through pair combinations
     for (mycomb in names(all.combz)) {
       
       ## Creating output dir
-      mycoef <- paste0(cur.fac, '~', mycomb)
+      mycoef <- paste0(cur.cond, '~', mycomb)
       message(mycoef)
       
       de.dir <- paste(c(factor.dir, mycomb), collapse = '/')
       dir.create(path = de.dir, recursive = TRUE)
       
       ## Getting results table for current contrast
-      mycontrast <- sapply(all.combz[[mycomb]], function(x) { paste0(cur.fac, x)}, simplify = FALSE)
+      mycontrast <- sapply(all.combz[[mycomb]], function(x) { paste0(cur.cond, x)}, simplify = FALSE)
       DEres <- DESeq2::results(htg.de.wald, contrast = mycontrast, listValues = c(1, -1/length(all.combz[[mycomb]][[2]])), independentFiltering = TRUE, alpha = adjp.max, pAdjustMethod = "BH", parallel = TRUE, BPPARAM = BPPARAM)
       
       ## Saving the test results object
@@ -199,32 +310,60 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
       abline(h = -log10(adjp.max), lty = 2, col = 4)
       abline(v = lfc.min * c(-1, 1), lty = 2, col = 4)
       dev.off()
-      ## Output table
-      DEres.df <- cbind(Symbol = rownames(DEres), as.data.frame(DEres))
-      DEres.df$cuts.in <- 0
-      DEres.df$cuts.in[deg.idx] <- 1
-      DEres.df <- DEres.df[order(DEres.df$padj, abs(DEres.df$log2FoldChange), decreasing = c(F, T)),]
-      write.table(DEres.df, file = paste0(de.dir, '/', mycomb, '_results.txt'), sep = '\t', quote = FALSE, row.names = FALSE)
       
-      sig.genes <- as.character(DEres.df$Symbol[DEres.df$cuts.in == 1])
+      ## Computing per-class metrics
+      mc.samp.idx <- lapply(levels(SummarizedExperiment::colData(DE2obj)[[cur.cond]]), function(mc.lev) {
+        which(SummarizedExperiment::colData(DE2obj)[[cur.cond]] == mc.lev)
+      })
+      names(mc.samp.idx) <- levels(SummarizedExperiment::colData(DE2obj)[[cur.cond]])
+      mc.metrics <- lapply(names(mc.samp.idx), function(mc.lev) {
+        mydf <- data.frame(N = length(mc.samp.idx[[mc.lev]])
+                           , Min = rowMins(norm.mat[,mc.samp.idx[[mc.lev]]], dims = 1)
+                           , Max = rowMaxs(norm.mat[,mc.samp.idx[[mc.lev]]], dims = 1)
+                           , Mean = rowMeans(norm.mat[,mc.samp.idx[[mc.lev]]], dims = 1)
+                           , Median = matrixStats::rowMedians(x = norm.mat, cols = mc.samp.idx[[mc.lev]])
+                           , matrixStats::rowQuantiles(x = norm.mat, cols = mc.samp.idx[[mc.lev]], probs = c(.25, .75)))
+        colnames(mydf) <- paste0(mc.lev, '.', c(colnames(mydf)[1:(ncol(mydf)-2)], 'Q25', 'Q75'))
+        return(mydf)
+      })
+      ## Output table
+      DEres.df <- cbind(Symbol = rownames(DEres), as.data.frame(DEres), Reduce(f = cbind, x = mc.metrics))
+      sig.word <- paste0('Sig_@adjp', adjp.max, '_lfc', lfc.min)
+      DEres.df[[sig.word]] <- 0
+      DEres.df[[sig.word]][deg.idx] <- 1
+      DEres.df <- DEres.df[order(DEres.df$padj, abs(DEres.df$log2FoldChange), decreasing = c(FALSE, TRUE)),]
+      write.table(DEres.df, file = paste0(de.dir, '/', mycomb, '_results.tsv'), sep = '\t', quote = FALSE, row.names = FALSE)
+      
+      sig.genes <- as.character(DEres.df$Symbol[DEres.df[sig.word] == 1])
+      
+      ## Draw gene boxplot
+      if(boxplots & length(sig.genes) > 0) {
+        gdir <- paste0(de.dir, '/boxplots')
+        dir.create(path = gdir, recursive = TRUE)
+        for (g in sig.genes[1:(min(length(sig.genes), or.top.max))]) {
+          png(filename = paste0(gdir, '/', g, '_norm.exp_boxplot.png'), width = 800, height = 600)
+          boxplot(norm.mat[g,] ~ SummarizedExperiment::colData(DE2obj)[[cur.cond]], xlab = cur.cond, ylab = 'Normalized expression', main = paste0(g, ' normalized expression VS ', cur.cond, '\nDESeq2 : l2FC = ', round(DEres.df[g, 'log2FoldChange'], digits = 3), ' ; adjP = ', format(DEres.df[g, 'padj'], scientific = TRUE, digits = 3)), col = seq_len(nlevels(SummarizedExperiment::colData(DE2obj)[[cur.cond]]))+1)
+          dev.off()
+        }
+      }
       
       ## Setting a color palette for the heatmaps
-      myPalette <- c("royalblue3", "ivory", "orangered3")
-      myRamp <- circlize::colorRamp2(c(-2, 0, 2), myPalette)
+      myRamp <- circlize::colorRamp2(c(-2, 0, 2), heatmap.palette)
       
       if (length(sig.genes) > enr.min.genes) {
         
-        cur.annot <- as.data.frame(SummarizedExperiment::colData(DE2obj)[,c(cur.fac, batch.colnames), drop = FALSE])
-        cur.samples.idx <- cur.annot[[cur.fac]] %in% unlist(all.combz[[mycomb]])
+        cur.annot <- as.data.frame(SummarizedExperiment::colData(DE2obj)[,c(cur.cond, covar.colnames), drop = FALSE])
+        cur.samples.idx <- cur.annot[[cur.cond]] %in% unlist(all.combz[[mycomb]])
         
         ## Heatmap
         ## data to plot
         plotDat <- norm.mat[rownames(norm.mat) %in% sig.genes, cur.samples.idx]
-        # plotDat <- norm.mat[rownames(norm.mat) %in% sig.genes, SummarizedExperiment::colData(DE2obj)[[cur.fac]] %in% unlist(all.combz[[mycomb]])]
+        # plotDat <- norm.mat[rownames(norm.mat) %in% sig.genes, SummarizedExperiment::colData(DE2obj)[[cur.cond]] %in% unlist(all.combz[[mycomb]])]
         z.mat <- (plotDat - rowMeans(plotDat)) / matrixStats::rowSds(plotDat)
         # Creating sample annotation
-        # ha1 = ComplexHeatmap::HeatmapAnnotation(df = SummarizedExperiment::colData(DE2obj)[,c(cur.fac, batch.colnames), drop = FALSE][SummarizedExperiment::colData(DE2obj)[[cur.fac]] %in% unlist(all.combz[[mycomb]]),])
-        ha1 = ComplexHeatmap::HeatmapAnnotation(df = cur.annot[cur.samples.idx,c(cur.fac, batch.colnames), drop = FALSE])
+        # ha1 = ComplexHeatmap::HeatmapAnnotation(df = SummarizedExperiment::colData(DE2obj)[,c(cur.cond, covar.colnames), drop = FALSE][SummarizedExperiment::colData(DE2obj)[[cur.cond]] %in% unlist(all.combz[[mycomb]]),])
+        set.seed(my.seed)
+        ha1 = ComplexHeatmap::HeatmapAnnotation(df = cur.annot[cur.samples.idx,c(cur.cond, covar.colnames), drop = FALSE])
         
         ## Looping through requested clustering methods
         for (sdm in samples.dist.method) {
@@ -235,20 +374,23 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
                 hc.s <- hclust(amap::Dist(x = t(plotDat), method = sdm), method = shm)
                 ## Clustering genes
                 hc.g <- hclust(amap::Dist(x = plotDat, method = gdm), method = ghm)
-                # Enhanced heatmap
+                ## Compute heatmap
+                set.seed(my.seed)
+                myHM <- suppressMessages(ComplexHeatmap::Heatmap(z.mat, name = "Normalized counts",
+                                                                 # use my custom color palette
+                                                                 col = myRamp,
+                                                                 # do not show gene names
+                                                                 show_row_name = TRUE,
+                                                                 # do not clusterize samples
+                                                                 cluster_columns = hc.s,
+                                                                 cluster_rows = hc.g,
+                                                                 # add a nice grey border to cells
+                                                                 rect_gp = grid::gpar(col = "darkgrey", lwd=0.5),
+                                                                 # add sample annotation
+                                                                 top_annotation = ha1))
+                ## Draw heatmap
                 png(paste0(de.dir, '/', mycomb, '_sig.', nrow(z.mat), 'x', ncol(z.mat), '_', paste(c(gdm, ghm, sdm, shm), collapse = "_"), '.heatmap.png'), width = min(ncol(z.mat) * 15, 2000) + 200, height = min(length(sig.genes) * 10, 5000) + 300)
-                suppressMessages(print(ComplexHeatmap::Heatmap(z.mat, name = "Normalized counts",
-                                              # use my custom color palette
-                                              col = myRamp,
-                                              # do not show gene names
-                                              show_row_name = TRUE,
-                                              # do not clusterize samples
-                                              cluster_columns = hc.s,
-                                              cluster_rows = hc.g,
-                                              # add a nice grey border to cells
-                                              rect_gp = grid::gpar(col = "darkgrey", lwd=0.5),
-                                              # add sample annotation
-                                              top_annotation = ha1)))
+                ComplexHeatmap::draw(myHM)
                 dev.off()
               }
             }
@@ -261,13 +403,14 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
         
         ## Heatmap
         ## data to plot
-        sig.genes <- as.character(DEres.df$Symbol[DEres.df$cuts.in == 1][1:or.top.max])
+        sig.genes <- as.character(DEres.df$Symbol[DEres.df[[sig.word]] == 1][1:or.top.max])
+        # sig.genes <- as.character(DEres.df$Symbol[DEres.df$cuts.in == 1][1:or.top.max])
         plotDat <- norm.mat[rownames(norm.mat) %in% sig.genes, cur.samples.idx]
-        # plotDat <- norm.mat[rownames(norm.mat) %in% sig.genes, SummarizedExperiment::colData(DE2obj)[[cur.fac]] %in% unlist(all.combz[[mycomb]])]
+        # plotDat <- norm.mat[rownames(norm.mat) %in% sig.genes, SummarizedExperiment::colData(DE2obj)[[cur.cond]] %in% unlist(all.combz[[mycomb]])]
         z.mat <- (plotDat - rowMeans(plotDat)) / matrixStats::rowSds(plotDat)
         # Creating sample annotation
-        # ha1 = ComplexHeatmap::HeatmapAnnotation(df = SummarizedExperiment::colData(DE2obj)[,c(cur.fac, batch.colnames)][annot.df[[cur.fac]] %in% unlist(all.combz[[mycomb]]),])
-        ha1 = ComplexHeatmap::HeatmapAnnotation(df = cur.annot[cur.samples.idx,c(cur.fac, batch.colnames), drop = FALSE])
+        # ha1 = ComplexHeatmap::HeatmapAnnotation(df = SummarizedExperiment::colData(DE2obj)[,c(cur.cond, covar.colnames)][annot.df[[cur.cond]] %in% unlist(all.combz[[mycomb]]),])
+        ha1 = ComplexHeatmap::HeatmapAnnotation(df = cur.annot[cur.samples.idx,c(cur.cond, covar.colnames), drop = FALSE])
         ## Clustering samples
         for (sdm in samples.dist.method) {
           for (shm in samples.hclust.method) {
@@ -276,20 +419,17 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
                 hc.s <- hclust(amap::Dist(x = t(plotDat), method = sdm), method = shm)
                 ## Clustering genes
                 hc.g <- hclust(amap::Dist(x = plotDat, method = gdm), method = ghm)
-                # Enhanced heatmap
+                ## Computing heatmap
+                myHM <- suppressMessages(ComplexHeatmap::Heatmap(z.mat, name = "Normalized counts",
+                                                               col = myRamp,
+                                                               show_row_name = TRUE,
+                                                               cluster_columns = hc.s,
+                                                               cluster_rows = hc.g,
+                                                               rect_gp = grid::gpar(col = "darkgrey", lwd=0.5),
+                                                               top_annotation = ha1))
+                ## Draw
                 png(paste0(de.dir, '/', mycomb, '_sig.TOP', nrow(z.mat), 'x', ncol(z.mat), '_', paste(c(gdm, ghm, sdm, shm), collapse = "_"), '.heatmap.png'), width = min(ncol(z.mat) * 15, 2000) + 200, height = min(length(sig.genes) * 10, 5000) + 300)
-                suppressMessages(print(ComplexHeatmap::Heatmap(z.mat, name = "Normalized counts",
-                                              # use my custom color palette
-                                              col = myRamp,
-                                              # do not show gene names
-                                              show_row_name = TRUE,
-                                              # do not clusterize samples
-                                              cluster_columns = hc.s,
-                                              cluster_rows = hc.g,
-                                              # add a nice grey border to cells
-                                              rect_gp = grid::gpar(col = "darkgrey", lwd=0.5),
-                                              # add sample annotation
-                                              top_annotation = ha1)))
+                ComplexHeatmap::draw(myHM)
                 dev.off()
               }
             }
@@ -337,7 +477,9 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
           if(go.do[1]) {
             func.name <- 'clusterProfiler::gseGO'
             for (x in c('BP', 'CC', 'MF')) {
-              my.gsea.res <- try(gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enrp.max, minGSSize = enr.min.genes, OrgDb = get(paste0(msigdbr2org(species), '.db')), ont = x))
+              my.org <- paste0(msigdbr2org(species), '.db')
+              library(my.org, character.only = TRUE)
+              my.gsea.res <- try(gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enrp.max, minGSSize = enr.min.genes, OrgDb = get(my.org), ont = x))
               if (!is(my.gsea.res, class2 = 'try-error')) {
                 my.gsea.res@setType <- paste(c(my.gsea.res@setType, x), collapse = '_')
                 gsea.output(gseaResult = my.gsea.res, out.dir = de.dir, comp.name = mycomb)
@@ -358,7 +500,9 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
           if(go.do[2]) {
             func.name <- 'clusterProfiler::enrichGO'
             for (x in c('BP', 'CC', 'MF')) {
-              my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, species = species, func.name = func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enrp.max, minGSSize = enr.min.genes, OrgDb = get(paste0(msigdbr2org(species), '.db')), ont = x)
+              my.org <- paste0(msigdbr2org(species), '.db')
+              library(my.org, character.only = TRUE)
+              my.ora.res <- ora.run(gene = enr.inputs$ora.genevec, species = species, func.name = func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enrp.max, minGSSize = enr.min.genes, OrgDb = get(my.org), ont = x)
               if (!is(my.ora.res, class2 = 'try-error')) {
                 my.ora.res@ontology <- paste(c(my.ora.res@ontology, x), collapse = '_')
                 ora.output(enrichResult = my.ora.res, out.dir = de.dir, comp.name = mycomb, geneList = enr.inputs$gsea.genevec)
@@ -434,7 +578,9 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
         
         ## REACTOME
         if (any(reactome.do)) {
-          reactome.org <- tolower(convert_species_name(OrgDb = get(paste0(msigdbr2org(species = species), '.db'))))
+          org.name <- paste0(msigdbr2org(species = species), '.db')
+          library(org.name, character.only = TRUE)
+          reactome.org <- tolower(convert_species_name(OrgDb = get(org.name)))
           if(reactome.do[1]) {
             ### GSEA
             func.name <- 'ReactomePA::gsePathway'
@@ -482,7 +628,7 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
           mesh.sp <- paste0(c('MeSH.', substr(unlist(strsplit(species, ' ')), c(1, 1), c(1,2)), '.eg.db'), collapse = '')
           ### Checking which MeSH DBs are available for the current species.
           mesh.dbs <- MeSHDbi::listDatabases(eval(parse(text = paste0(mesh.sp, '::', mesh.sp))))[,1]
-    
+          
           ### ORA
           #### WARNING !! the 'gene2pubmed' requires a lot of RAM (~12 GB) !!
           if (mesh.do[2]) {
@@ -501,7 +647,7 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
               }
             }
           }
-    
+          
           ### GSEA
           #### WARNING !! Needs too much memory for a laptop (probably over 64 GB of RAM, easily...). SO, not recommended out of flamingo.
           if(mesh.do[1]) {
