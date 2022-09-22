@@ -3,7 +3,7 @@
 ## . annot.df           [s x a data.frame]      A data.frame with covariates as columns (numeric or factor)
 ## . factor.names       [vec(char)]             Column names of annot.df corresponding to factor covariates
 ## . conti.colnames     [vec(char)]             Column names of annot.df corresponding to contiunous covariates
-## . red.method         [char]                  Dimension reduction method ['PCA', 'MDS']
+## . red.method         [char]                  Dimension reduction method ['PCA', 'MDS.euc', 'MDS.spear']
 ## . ndim.max           [int>0]                 Number of dimensions to compute and plot
 ## . center             [bool]                  Center mat ?
 ## . scale              [bool]                  Scale mat ?
@@ -11,9 +11,6 @@
 ## . color.palette      [vec(col)]              Color vector (length 2) for the heatmap
 ## . out.file           [char]                  Output PNG file name (and path)
 assess.covar <- function(mat = NULL, annot.df = NULL, factor.names = NULL, conti.names = NULL, red.method = 'pca', ndim.max = 10, center = TRUE, scale = TRUE, coef.cut = 0, color.palette = c("white", "orangered3"), out.file = paste0(getwd(), '/Assess_covariates.png')) {
-  # message('POUET')
-  # message(ncol(mat))
-  # message(ndim.max)
   ## Checks
   ### Mandatory
   if (is.null(mat)) stop('A (f feature by s sample) matrix [mat] is required.')

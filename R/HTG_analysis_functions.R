@@ -33,7 +33,7 @@ htg.boxplot <- function(matrix.list = NULL, annot.df = NULL, col.item = NULL, co
     matrix.list[[x]] <- matrix.list[[x]][,colorder]
     boxplot(matrix.list[[x]], border = col[colorder], pch = 20, main = paste0(names(matrix.list)[x], ', colored by ', col.item), ylab = 'log10(counts+1)', xaxs = 'i')
   }
-  par(oripar)
+  suppressWarnings(par(oripar))
 }
 
 ## Euclidean-forced wrapper for pvclust

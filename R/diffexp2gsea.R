@@ -95,10 +95,12 @@ table2enr <- function(deseq2.res.data = NULL, species = "Homo sapiens", geneid.c
   ## GSEA
   gsea.genevec <- sort(setNames(deres[[value.colname]], deres$ENTREZID), decreasing = TRUE)
   ## ORA
-  deres2 <- deres[!is.na(deres[[topN.order.colname]]),]
-  deres2 <- deres2[order(deres2[[topN.order.colname]], decreasing = topN.order.decreasing),]
-  top.keep <- min(length(which(eval(parse(text = paste0('deres2[["', topN.order.colname, '"]] ', topN.keep.operator, ' topN.cutoff'))))), topN.max)
-  ora.genevec <- if(length(top.keep) > 0) setNames(deres2$ENTREZID[1:top.keep], deres2[[geneid.colname]][1:top.keep]) else c()
+  if (!is.null(topN.max)) {
+    deres2 <- deres[!is.na(deres[[topN.order.colname]]),]
+    deres2 <- deres2[order(deres2[[topN.order.colname]], decreasing = topN.order.decreasing),]
+    top.keep <- min(length(which(eval(parse(text = paste0('deres2[["', topN.order.colname, '"]] ', topN.keep.operator, ' topN.cutoff'))))), topN.max)
+    ora.genevec <- if(length(top.keep) > 0) setNames(deres2$ENTREZID[1:top.keep], deres2[[geneid.colname]][1:top.keep]) else c()
+  } else ora.genevec <- NULL
   
   return(list(gsea.genevec = gsea.genevec,
               ora.genevec = ora.genevec,
@@ -110,11 +112,11 @@ table2enr <- function(deseq2.res.data = NULL, species = "Homo sapiens", geneid.c
 pipe2enr <- function(deseq2.res.file = NULL, ...) {
   ## Checks
   ## Loading the DE table
-  deres <- read.table(file = deseq2.res.file, header = TRUE, sep = "\t", as.is = TRUE)
+  deres <- read.table(file = deseq2.res.file, header = TRUE, sep = "\t", quote = '', as.is = TRUE)
   ## Launching table2enr()
   table2enr(deseq2.res.data = deres, ...)
 }
-  
+
 ### FUNCTION TO PERFORM GSEA
 ### . 'geneList' : numeric vector : a named vector of decreasing values, with EntrezIDs as names
 ### . 'species' : character ; a species name, as in the 'species_name' column of msigdbr::msigdbr_species()
@@ -127,8 +129,8 @@ pipe2enr <- function(deseq2.res.file = NULL, ...) {
 ### . '...' : any other parameter to pass to 'func.name'
 ### NOTE : For input ('geneList'), ALWAYS use all available genes (ie, not limited to significant differentialy expressed genes), as intended for GSEA analysis. NEVER use a selection of genes (results will be corrupt). Please also be careful that you may obtain significant GSEA results from a list of values corresponding to NO significant genes (as GSEA only needs the order of these genes). In this case you may talk about "tendencies" of enrichment in your differential expression results.
 gsea.run <- function(geneList = NULL, func.name = 'clusterProfiler::GSEA', species = 'Homo sapiens', t2g = NULL, t2g.name = NULL, gene2Symbol = NULL, seed = 1337, pvalueCutoff = 5E-02, minGSSize = 10, ...) {
-
-  ## Checks
+  
+  ## Checks ----
   if (any(!is.numeric(geneList))) stop("'geneList' should be a decreasingly sorted numeric vector, named with EntrezIDs.")
   if (length(names(geneList)) == 0) stop("'geneList' should be a decreasingly sorted numeric vector, named with EntrezIDs.")
   if (!all(geneList == sort(geneList, decreasing = TRUE))) stop("'geneList' should be a decreasingly sorted numeric vector, named with EntrezIDs.")
@@ -150,15 +152,15 @@ gsea.run <- function(geneList = NULL, func.name = 'clusterProfiler::GSEA', speci
   if (!(minGSSize > 0)) stop("'minGSSize' should a non-null positive integer.")
   if (minGSSize < 10) warning("'minGSSize' < 10 : expect no result !")
   
-  ## Loading the requested function
+  ## Loading the requested function ----
   func.split <- unlist(strsplit(func.name, '::'))
   gse.function <- base::get(func.split[2], envir = loadNamespace(func.split[1]))
-
+  
   if (func.name == 'clusterProfiler::GSEA') {
     if (is.null(t2g)) stop("When calling this function with func.name = 'clusterProfiler::GSEA', a value is required for 't2g'")
     if (is.null(t2g.name)) stop("When calling this function with func.name = 'clusterProfiler::enricher', a value is required for 't2g.name'")
     
-    ## Functions requiring a TERM2GENE (msigdbr, CellMarkers, ...)
+    ## Functions requiring a TERM2GENE (msigdbr, CellMarkers, ...) ----
     gsea.res <- gse.function(geneList = geneList, TERM2GENE = t2g, pvalueCutoff = pvalueCutoff, minGSSize = minGSSize, seed = seed, ...)
     func.name <- paste(c(func.name, t2g.name), collapse = '_')
   } else if (func.name == 'meshes::gseMeSH') {
@@ -179,7 +181,7 @@ gsea.run <- function(geneList = NULL, func.name = 'clusterProfiler::GSEA', speci
       # if (func.name %in% c('clusterProfiler::gseGO')) gsea.res@setType <- paste0('GO.', gsea.res@setType)
     }
   }
-
+  
   ## Adding some useful metadata
   gsea.res@organism <- species
   gsea.res@setType <- func.name
@@ -194,26 +196,26 @@ gsea.run <- function(geneList = NULL, func.name = 'clusterProfiler::GSEA', speci
 ### . 'gseaResult' : gseaResult object ; an output from the gsea.run() function
 ### . 'comp.name' : character ; The name of the differential expression comparison which resulted in the 'geneList' input to gsea.run(). Actually, only used in plots' title.
 ### . 'out.dir' : character ; directory to output plots and tables
-### . 'heatplot' : integer of NULL ; if integer perform an enrichplot::dotplot() limited to a number of term corresponding to the given integer value. If null, no plot is performed.
-### . 'dotplot' : integer of NULL ; if integer perform an enrichplot::dotplot() limited to a number of term corresponding to the given integer value. If null, no plot is performed.
-### . 'barplot' : integer of NULL ; if integer perform an enrichplot::barplot() limited to a number of term corresponding to the given integer value. If null, no plot is performed.
-### gsea.plot : logic ; perform per-term enrichment plots like generated by the BROAD GSEA app.
-### . 'ridgeplot' : integer of NULL ; if integer perform an enrichplot::ridgeplot() limited to a number of term corresponding to the given integer value. If null, no plot is performed.
-### . 'cnetplot' : integer of NULL ; if integer perform an enrichplot::cnetplot() limited to a number of term corresponding to the given integer value. If null, no plot is performed.
-### . 'emapplot' : integer of NULL ; if integer perform an enrichplot::emapplot() limited to a number of term corresponding to the given integer value. If null, no plot is performed.
+### . 'heatplot' : integer or NULL ; if integer perform an enrichplot::dotplot() limited to a number of term corresponding to the given integer value. If null, no plot is performed.
+### . 'dotplot' : integer or NULL ; if integer perform an enrichplot::dotplot() limited to a number of term corresponding to the given integer value. If null, no plot is performed.
+### . 'barplot' : integer or NULL ; if integer perform an enrichplot::barplot() limited to a number of term corresponding to the given integer value. If null, no plot is performed.
+### gsea.plot : integer or NULL ; perform per-term enrichment plots like generated by the BROAD GSEA app, limited to the first X terms. No plot if null.
+### . 'ridgeplot' : integer or NULL ; if integer perform an enrichplot::ridgeplot() limited to a number of term corresponding to the given integer value. If null, no plot is performed.
+### . 'cnetplot' : integer or NULL ; if integer perform an enrichplot::cnetplot() limited to a number of term corresponding to the given integer value. If null, no plot is performed.
+### . 'emapplot' : integer or NULL ; if integer perform an enrichplot::emapplot() limited to a number of term corresponding to the given integer value. If null, no plot is performed.
 ### . 'lfc.min' : numeric ; abs(log2FoldChange) value to target as color saturation for KEGG pathview plots.
-gsea.output <- function(gseaResult = NULL, comp.name = 'TEST', out.dir = getwd(), heatplot = 100, dotplot = 100, barplot = 100, gsea.plot = TRUE, ridgeplot = 100, cnetplot = 10, emapplot = 10, lfc.min = 1) {
-
+gsea.output <- function(gseaResult = NULL, comp.name = 'TEST', out.dir = getwd(), heatplot = 100, dotplot = 100, barplot = 100, gsea.plot = 100, ridgeplot = 100, cnetplot = 10, emapplot = 10, lfc.min = 1) {
+  
   ## Significant terms ?
   gsea.sig.tf <- gseaResult@result$p.adjust < gseaResult@params$pvalueCutoff
-
+  
   if (any(gsea.sig.tf)) {
-
+    
     ## Creating GSEA output dir
     # gsea.dir <- paste(c(out.dir, paste0('GSEA_adjp.', gseaResult@params$pvalueCutoff), paste(c(sub(pattern = '.*::', replacement = '', x = gseaResult@setType), ...), collapse = '.')), collapse = '/')
     gsea.dir <- paste(c(out.dir, paste0('GSEA_adjp.', gseaResult@params$pvalueCutoff), sub(pattern = '.*::', replacement = '', x = gseaResult@setType)), collapse = '/')
     dir.create(path = gsea.dir, recursive = TRUE)
-
+    
     ## Dumping GSEA results
     saveRDS(gseaResult, file = paste0(gsea.dir, '/GSEA.results.RDS'), compress = 'bzip2')
     
@@ -221,7 +223,7 @@ gsea.output <- function(gseaResult = NULL, comp.name = 'TEST', out.dir = getwd()
     gseaResult_readable <- DOSE::setReadable(gseaResult, OrgDb = paste0(msigdbr2org(gseaResult@organism), '.db'))
     ## Writing readable table
     write.table(gseaResult_readable@result, file = paste0(gsea.dir, '/GSEA.results_readable.tsv'), quote = FALSE, sep = "\t", row.names = FALSE)
-
+    
     ## Heatplot (needs readable)
     if (!is.null(heatplot)) {
       suppressMessages(hp <- enrichplot::heatplot(gseaResult_readable, showCategory = heatplot, foldChange = gseaResult@geneList))
@@ -260,16 +262,18 @@ gsea.output <- function(gseaResult = NULL, comp.name = 'TEST', out.dir = getwd()
     }
     
     ## GSEA plots
-    if (gsea.plot) {
+    if (!is.null(gsea.plot) & gsea.plot > 0) {
+      ### clusterProfiler format
       gseaplot.dir <- paste0(gsea.dir, '/gseaplot_clusterProfiler/')
       dir.create(path = gseaplot.dir, recursive = TRUE)
       png(paste0(gseaplot.dir, '/GSEA.gseaplot_cP_%04d.png'), width = 1024, height = 768)
-      for (x in 1:nrow(gseaResult)) suppressMessages(print(enrichplot::gseaplot(gseaResult, geneSetID = x, title = paste0(toupper(gseaResult@result$Description[x]), "\nNES = ", sprintf("%.2f", gseaResult@result$NES[x]), " // Adj.p = ", sprintf(fmt = "%.1E", gseaResult@result$p.adjust[x])))))
+      for (x in 1:min(nrow(gseaResult), gsea.plot)) suppressMessages(print(enrichplot::gseaplot(gseaResult, geneSetID = x, title = paste0(toupper(gseaResult@result$Description[x]), "\nNES = ", sprintf("%.2f", gseaResult@result$NES[x]), " // Adj.p = ", sprintf(fmt = "%.1E", gseaResult@result$p.adjust[x])))))
       dev.off()
+      ### Broad format
       gseaplot.dir <- paste0(gsea.dir, '/gseaplot_Broad/')
       dir.create(path = gseaplot.dir, recursive = TRUE)
       png(paste0(gseaplot.dir, '/GSEA.gseaplot_Broad_%04d.png'), width = 1024, height = 768)
-      for (x in 1:nrow(gseaResult)) suppressMessages(print(enrichplot::gseaplot2(gseaResult, geneSetID = x, title = paste0(toupper(gseaResult@result$Description[x]), "\nNES = ", sprintf("%.2f", gseaResult@result$NES[x]), " // Adj.p = ", sprintf(fmt = "%.1E", gseaResult@result$p.adjust[x])))))
+      for (x in 1:min(nrow(gseaResult), gsea.plot)) suppressMessages(print(enrichplot::gseaplot2(gseaResult, geneSetID = x, title = paste0(toupper(gseaResult@result$Description[x]), "\nNES = ", sprintf("%.2f", gseaResult@result$NES[x]), " // Adj.p = ", sprintf(fmt = "%.1E", gseaResult@result$p.adjust[x])))))
       dev.off()
     }
     ## KEGG pathview
@@ -315,7 +319,7 @@ gsea.output <- function(gseaResult = NULL, comp.name = 'TEST', out.dir = getwd()
 ### . 'minGSSize' : integer ; minimal size of each geneSet for analyzing (see clusterProfiler::GSEA)
 ### . '...' : any other parameter to the ORA function
 ora.run <- function(gene = NULL, func.name = 'clusterProfiler::enricher', species = 'Homo sapiens', t2g = NULL, t2g.name = NULL, gene2Symbol = NULL, pvalueCutoff = 5E-02, minGSSize = 10, ...) {
-
+  
   ## Checks
   if (any(!is.character(gene))) stop("'gene' should be a character vector.")
   if (!is.character(func.name)) stop("'func.name' should be a character.")
@@ -342,7 +346,7 @@ ora.run <- function(gene = NULL, func.name = 'clusterProfiler::enricher', specie
   ## Loading the requested function
   func.split <- unlist(strsplit(func.name, '::'))
   or.function <- base::get(func.split[2], envir = loadNamespace(func.split[1]))
-
+  library(paste0(msigdbr2org(species), '.db'), character.only = TRUE)
   if (func.name == 'clusterProfiler::enricher') {
     if (is.null(t2g)) stop("When calling this function with func.name = 'clusterProfiler::enricher', a value is required for 't2g'")
     if (is.null(t2g.name)) stop("When calling this function with func.name = 'clusterProfiler::enricher', a value is required for 't2g.name'")
@@ -388,16 +392,16 @@ ora.run <- function(gene = NULL, func.name = 'clusterProfiler::enricher', specie
 ### . 'emapplot' : integer of NULL ; if integer perform an enrichplot::emapplot() limited to a number of term corresponding to the given integer value. If null, no plot is performed.
 ### . 'lfc.min' : numeric ; abs(log2FoldChange) value to target as color saturation for KEGG pathview plots.
 ora.output <- function(enrichResult = NULL, comp.name = 'TEST', out.dir = getwd(), heatplot = 100, geneList = NULL, dotplot = 100, barplot = 100, cnetplot = 10, emapplot = 10, lfc.min = 1) {
-
+  
   ## Significant terms ?
   ora.sig.tf <- enrichResult@result$p.adjust < enrichResult@pvalueCutoff
-
+  
   if (any(ora.sig.tf)) {
-
+    
     ## Creating ORA output dir
     # ora.dir <- paste(c(out.dir, paste0('ORA_adjp.', enrichResult@pvalueCutoff), enrichResult@ontology), collapse = '/')
     ora.dir <- paste(c(out.dir, paste0('ORA_adjp.', enrichResult@pvalueCutoff), sub(pattern = '.*::', replacement = '', x = enrichResult@ontology)), collapse = '/')
-
+    
     dir.create(path = ora.dir, recursive = TRUE)
     
     ## Dumping ORA results
@@ -473,22 +477,22 @@ ora.output <- function(enrichResult = NULL, comp.name = 'TEST', out.dir = getwd(
 # #### EXAMPLES ####
 # ##################
 # 
-# ## Setting variables
+# ## Setting variables ----
 # defile <- '/home/job/WORKSPACE/B21002_DELE_01/B21002_DELE_01_dge/DGE/GSEAapp/Macrophage_type_compairing_Proinf_vs_Basal/Macrophage_type_compairing_Proinf_vs_Basal_complete.tsv'
 # out.dir <- dirname(defile)
 # comp.name <- basename(dirname(defile))
 # species <- 'Homo sapiens'
-# my.seed <- 1337
-# lfc.min <- .5
+# my.seed <- 1337L
+# lfc.min <- 1
 # de.min.p <- 5E-02
 # enr.min.p <- 5E-02
 # enr.min.genes <- 10
 # topN <- 100
 # 
-# ## PREPARING INPUT (from a '*_complete.tsv' output table from our 'rna-salmon-deseq2' pipeline)
+# ## PREPARING INPUT (from a '*_complete.tsv' output table from our 'rna-salmon-deseq2' pipeline) ----
 # enr.inputs <- pipe2enr(deseq2.res.file = defile, species = species, geneid.colname = 'Gene_Name', geneid.type = 'SYMBOL', value.colname = 'stat_change', topN.max = topN, topN.order.colname = 'Adjusted_PValue', topN.order.decreasing = FALSE, topN.cutoff = de.min.p, topN.keep.operator = '<')
 # 
-# ## MSIGDB
+# ## MSIGDB ----
 # ### Query any (and in this example, all) MsigDB banks available in the 'msigdbr' package. See http://www.gsea-msigdb.org/gsea/msigdb/collections.jsp
 # ### Get available species / collections
 # msigdb.collections <- as.data.frame(msigdbr::msigdbr_collections())
@@ -518,7 +522,7 @@ ora.output <- function(enrichResult = NULL, comp.name = 'TEST', out.dir = getwd(
 #   ora.output(enrichResult = my.ora.res, out.dir = out.dir, comp.name = comp.name, geneList = enr.inputs$gsea.genevec)
 # }
 # 
-# ## DO (Disease Ontology), NCG (Network of Cancer Genes), DGN (DisGeNET)
+# ## DO (Disease Ontology), NCG (Network of Cancer Genes), DGN (DisGeNET) ----
 # ### WARNING : ONLY FOR 'Homo sapiens' !
 # 
 # ### GSEA
@@ -597,7 +601,7 @@ ora.output <- function(enrichResult = NULL, comp.name = 'TEST', out.dir = getwd(
 # ## KEGG/MKEGG
 # ### NOTE1 : It's the same way to call the 'gsea.run' / 'ora.run' as it is for 'DO', 'NCG' or 'DGN', but here it's compatible with many more species than homo sapiens.
 # ### NOTE2 : for this case, additional KEGG pathway plots will be generated.
-# ### NOTE3 : for this case, an internet connexion is required to query the KEGG website.
+# ### NOTE3 : for this case, an internet connection is required to query the KEGG website.
 # 
 # ### GSEA
 # for (x in c('clusterProfiler::gseKEGG', 'clusterProfiler::gseMKEGG')) {
