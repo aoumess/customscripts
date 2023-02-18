@@ -70,13 +70,13 @@ NBSEG <- nrow(as.res$segments)
 ### Compute a score on a per-chromosome basis, taking the longest ACN (in bp) as normal basis
 library(foreach)
 suppressPackageStartupMessages(library(dplyr))
-LOKAL1 <- sum(foreach (k = unique(as.res$segments$chr), .combine = "c") %do% {
-  miniseg <- tibble::as_tibble(as.res$segments[as.res$segments$chr == k,])
-  basistbl <- miniseg %>% group_by(TCN) %>% summarise(sum(Width))
-  basis <- basistbl$TCN[which.max(as.data.frame(basistbl)[,2])]
-  KSCOR <- sum(abs(miniseg$TCN  - basis) * miniseg$Width) / cs$genome.length
-  return(KSCOR)
-})
+  LOKAL1 <- sum(foreach (k = unique(as.res$segments$chr), .combine = "c") %do% {
+    miniseg <- tibble::as_tibble(as.res$segments[as.res$segments$chr == k,])
+    basistbl <- miniseg %>% group_by(TCN) %>% summarise(sum(Width))
+    basis <- basistbl$TCN[which.max(as.data.frame(basistbl)[,2])]
+    KSCOR <- sum(abs(miniseg$TCN  - basis) * miniseg$Width) / cs$genome.length
+    return(KSCOR)
+  })
 
 ## Generating output
 outdf <- data.frame(Samplename = samplename, Best_gamma = best.gamma, Ploidy = ploidy, Cellularity = as.res$aberrantcellfraction, GoF = gof, Psi = as.res$psi, SCORE1 = SKOR1, SCORE2 = SKOR2, SCORE3 = SKOR3, NBSEG = NBSEG, LOCAL1 = LOKAL1, stringsAsFactors = FALSE)
