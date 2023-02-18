@@ -12,7 +12,7 @@ for CL in ${COLLECLIST[@]}; do {
   echo ${CL}
   FILELIST=(`ils "${CL}/archive" | grep -v ':' | cut -d' ' -f 3`)
   for FL in ${FILELIST[@]}; do {
-    iget -fvK r "${CL}/archive/${FL}" ${DATADIR};
+    iget -fvK "${CL}/archive/${FL}" ${DATADIR};
   }
   done;
 }
