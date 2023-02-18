@@ -10,14 +10,14 @@
 ## . coef.cut           [0<=num<1]              Do not display coefficients inferior to this value on the heatmap
 ## . color.palette      [vec(col)]              Color vector (length 2) for the heatmap
 ## . out.file           [char]                  Output PNG file name (and path)
-assess.covar <- function(mat = NULL, annot.df = NULL, factor.names = NULL, conti.names = NULL, red.method = 'pca', ndim.max = 10, center = TRUE, scale = TRUE, coef.cut = 0, color.palette = c("white", "orangered3"), out.file = paste0(getwd(), '/Assess_covariates.png')) {
+assess.covar <- function(mat = NULL, annot.df = NULL, factor.names = NULL, conti.names = NULL, red.method = 'pca', ndim.max = 10, center = TRUE, scale = TRUE, coef.cut = 0, color.palette = c("white", "orangered3"), out.root = paste0(getwd(), '/Assess_covariates')) {
   ## Checks
   ### Mandatory
   if (is.null(mat)) stop('A (f feature by s sample) matrix [mat] is required.')
   if (is.null(annot.df)) stop('An annotation data.frame [annot.df] is required.')
   if (all(is.null(c(factor.names, conti.names)))) stop('At least one of [factor.names] or [conti.colnames] should not be NULL.')
   if (ndim.max <= 0) stop('[ndim.max] should be a non-null positive integer (and <= s samples).')
-  if (!dir.exists(dirname(out.file))) stop('Path to [out.file] does not exist.')
+  if (!dir.exists(dirname(out.root))) stop('Path to [out.root] does not exist.')
   if (!tolower(red.method) %in% c('pca', 'mds.euc', 'mds.spear')) stop('Unknown reduction method')
   ### Compatibility
   if (ndim.max > ncol(mat)) {
@@ -72,9 +72,10 @@ assess.covar <- function(mat = NULL, annot.df = NULL, factor.names = NULL, conti
                                    row_title = 'SVD dimensions',
                                    column_split = col.types,
                                    top_annotation = ComplexHeatmap::HeatmapAnnotation(Type = col.types, col = list(Type = setNames(object = c('lightblue','pink'), nm = c('factor', 'continuous')))))
-  png(filename = out.file, width = 800, heigh = 1000)
+  png(filename = paste0(out.root, '.png'), width = 800, heigh = 1000)
   ComplexHeatmap::draw(BC.hm)
   dev.off()
+  write.table(x = as.data.frame(bc.mat), file = gzfile(paste0(out.root, '.tsv.gz')), sep = '\t', quote = FALSE, row.names = FALSE)
 }
 
 
@@ -84,7 +85,7 @@ assess.covar <- function(mat = NULL, annot.df = NULL, factor.names = NULL, conti
 ## annot.df               data.frame          Sample annotations
 ## samples.colname        character           Name of the annot.df column to identify samples
 ## covar.colnames         vector(character)   Name(s) of the annot.df columns to consider as covariates (by ex, sources of batch effect) to remove through regression. WARNING : category-based covariates HAVE TO BE given as factors. If they are provided as characters, they WILL BE DISCARDED. For regression at the matrix level (for clustering, heatmap) through limma::removeBatchEffect, only the first 2 factors will be used. There is no limit for continuous covariates.
-## condition.colnames     vector(character)   Name(s) of the annot.df columns to consider as conditins on which computing the differential analysis. It/they should contain factors
+## condition.colnames     vector(character)   Name(s) of the annot.df columns to consider as conditions on which computing the differential analysis. It/they should contain factors
 ## invert.levels          logical             If TRUE, inverts the default order of levels (if the default one does not fit your biological preferences)
 ## adjp.max               0<numeric<1         BH FDR-adjusted p-value cut-off to consider differential genes as significant
 ## lfc.min                numeric+            Minimal logFoldChange to consider differential genes
@@ -112,7 +113,7 @@ assess.covar <- function(mat = NULL, annot.df = NULL, factor.names = NULL, conti
 ## boxplots               bool                If TRUE, draw boxplots of or.top.max genes
 ## save.wald              bool                If TRUE, save the DESeq2 object containing the results of the Wald test. This is FALSE by default, as the resulting object can be pretty big.
 ## color.palette          vec(color)          Vector of 3 colors used for the expression heatmap (lower values, middle, higher)
-DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample", covar.colnames = NULL, condition.colnames = NULL, invert.levels = FALSE, adjp.max = 5E-02, lfc.min = 1, lfcShrink = TRUE, enrp.max = 1E-02, enr.min.genes = 10, or.top.max = 100, only.others = FALSE, outdir = getwd(), samples.dist.method = 'spearman', samples.hclust.method = 'ward.D', genes.dist.method = 'spearman', genes.hclust.method = 'ward.D', msigdb.do = c(TRUE, TRUE), do.do = c(TRUE, TRUE), go.do = c(TRUE, TRUE), kegg.do = c(TRUE, TRUE), wp.do = c(TRUE, TRUE), reactome.do = c(TRUE, TRUE), cm.do = c(TRUE, TRUE), mesh.do = c(FALSE, FALSE), non.redundant = TRUE, species = 'Homo sapiens', dotplot.maxterms = 50, my.seed = 1234L, boxplots = TRUE, save.wald = FALSE, heatmap.palette = c("royalblue3", "ivory", "orangered3"), BPPARAM = BiocParallel::SerialParam()) {
+DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample", covar.colnames = NULL, condition.colnames = NULL, invert.levels = FALSE, adjp.max = 5E-02, lfc.min = 1, lfcShrink = TRUE, enrp.max = 1E-02, enr.min.genes = 10, or.top.max = 100, only.others = FALSE, outdir = getwd(), samples.dist.method = 'spearman', samples.hclust.method = 'ward.D', genes.dist.method = 'spearman', genes.hclust.method = 'ward.D', msigdb.do = c(TRUE, TRUE), do.do = c(TRUE, TRUE), go.do = c(TRUE, TRUE), kegg.do = c(TRUE, TRUE), wp.do = c(TRUE, TRUE), reactome.do = c(TRUE, TRUE), mesh.do = c(FALSE, FALSE), non.redundant = TRUE, species = 'Homo sapiens', dotplot.maxterms = 50, my.seed = 1234L, boxplots = TRUE, save.wald = FALSE, heatmap.palette = c("royalblue3", "ivory", "orangered3"), BPPARAM = BiocParallel::SerialParam()) {
   
   if (tolower(species) == 'homo sapiens') {
     Org <- 'org.Hs'
@@ -148,12 +149,12 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
   suppressPackageStartupMessages(library(circlize))
   
   ## Loading CellMarker db if needed
-  if (any(cm.do)) {
-    `%>%` <- dplyr::`%>%`
-    cm.filename <- if (tolower(species) == 'homo sapiens') 'Human_cell_markers.txt' else if (tolower(species) == 'mus musculus') 'Mouse_cell_markers.txt'
-    cell_markers <- vroom::vroom(paste0('http://bio-bigdata.hrbmu.edu.cn/CellMarker/download/', cm.filename)) %>% tidyr::unite("cellMarker", tissueType, cancerType, cellName, sep=", ") %>% dplyr::select(cellMarker, geneID) %>% dplyr::mutate(geneID = strsplit(geneID, ', '))
-  }
-  
+  # if (any(cm.do)) {
+  #   `%>%` <- dplyr::`%>%`
+  #   cm.filename <- if (tolower(species) == 'homo sapiens') 'Human_cell_markers.txt' else if (tolower(species) == 'mus musculus') 'Mouse_cell_markers.txt'
+  #   cell_markers <- vroom::vroom(paste0('http://bio-bigdata.hrbmu.edu.cn/CellMarker/download/', cm.filename)) %>% tidyr::unite("cellMarker", tissueType, cancerType, cellName, sep=", ") %>% dplyr::select(cellMarker, geneID) %>% dplyr::mutate(geneID = strsplit(geneID, ', '))
+  # }
+  # 
   ## Looping on factor names
   for (cur.cond in condition.colnames) {
     
@@ -225,7 +226,7 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
       factor.colnames <- conti.colnames <- NULL
       for (cn in covar.colnames) if (is.factor(DE2obj@colData[[cn]])) factor.colnames <- c(factor.colnames, cn) else if (is.numeric(DE2obj@colData[[cn]])) conti.colnames <- c(conti.colnames, cn) else stop(paste0('Covariate [', cn, '] is neither a factor nor a numeric/integer vector !'))
       #### Assessing covariates
-      assess.covar(mat = norm.mat, annot.df = as.data.frame(DE2obj@colData), factor.names = c(cur.cond, factor.colnames), conti.names = conti.colnames, red.method = 'pca', ndim.max = round(ncol(norm.mat)/2), center = TRUE, scale = TRUE, out.file = paste0(factor.dir, '/', cur.cond, '_assess_covariates_01_unregressed.png'))
+      assess.covar(mat = norm.mat, annot.df = as.data.frame(DE2obj@colData), factor.names = c(cur.cond, factor.colnames), conti.names = conti.colnames, red.method = 'pca', ndim.max = round(ncol(norm.mat)/2), center = TRUE, scale = TRUE, out.root = paste0(factor.dir, '/', cur.cond, '_assess_covariates_01_unregressed'))
       #### Running limma::removeBatchEffect the good way
       limma.bc.batch2 <- limma.bc.batch1 <- limma.bc.covar <- NULL
       ##### Handling factor covariates
@@ -244,7 +245,7 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
       norm.mat <- limma::removeBatchEffect(x = norm.mat, batch = limma.bc.batch1, batch2 = limma.bc.batch2, covariates = limma.bc.covar, design = model.matrix(as.formula(paste0('~0+', cur.cond)), data = DE2obj@colData))
       
       ### Assessing covariates (after regression)
-      assess.covar(mat = norm.mat, annot.df = as.data.frame(DE2obj@colData), factor.names = c(cur.cond, factor.colnames), conti.names = conti.colnames, red.method = 'pca', ndim.max = round(ncol(norm.mat)/2), center = TRUE, scale = TRUE, out.file = paste0(factor.dir, '/', cur.cond, '_assess_covariates_02_regressed.png'))
+      assess.covar(mat = norm.mat, annot.df = as.data.frame(DE2obj@colData), factor.names = c(cur.cond, factor.colnames), conti.names = conti.colnames, red.method = 'pca', ndim.max = round(ncol(norm.mat)/2), center = TRUE, scale = TRUE, out.root = paste0(factor.dir, '/', cur.cond, '_assess_covariates_02_regressed'))
     }
     
     ### PCAs
@@ -260,6 +261,8 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
     
     ## Saving the Wald test DESeq object
     if(save.wald) saveRDS(object = htg.de.wald, file = paste0(factor.dir, '/', cur.cond, '_wald.RDS'), compress = 'bzip2')
+    
+    print(all.combz)
     
     ## LOOPING through pair combinations
     for (mycomb in names(all.combz)) {
@@ -435,7 +438,7 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
       }
       
       ## Functional enrichment
-      if (any(msigdb.do, kegg.do, do.do, go.do, cm.do, wp.do, reactome.do, mesh.do) & length(which(deg.idx)) >= enr.min.genes & !is.null(species)) {
+      if (any(msigdb.do, kegg.do, do.do, go.do, wp.do, reactome.do, mesh.do) & length(which(deg.idx)) >= enr.min.genes & !is.null(species)) {
         
         enr.inputs <- table2enr(deseq2.res.data = DEres.df, species = species, geneid.colname = 'Symbol', geneid.type = 'SYMBOL', value.colname = 'log2FoldChange', topN.max = or.top.max, topN.order.colname = 'padj', topN.order.decreasing = FALSE, topN.cutoff = enrp.max, topN.keep.operator = '<')
         
@@ -461,7 +464,7 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
             }
             ### ORA
             if(msigdb.do[2]) {
-              my.ora.res <- try(ora.run(gene = enr.inputs$ora.genevec, species = species, func.name = 'clusterProfiler::enricher', t2g = my.t2g, t2g.name = msc, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enrp.max, minGSSize = enr.min.genes))
+              my.ora.res <- try(ora.run(gene = enr.inputs$ora.genevec, universe = unname(enr.inputs$gene2Symbol), species = species, func.name = 'clusterProfiler::enricher', t2g = my.t2g, t2g.name = msc, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enrp.max, minGSSize = enr.min.genes))
               ## Generate plots / outputs
               if (!is(my.ora.res, class2 = 'try-error')) ora.output(enrichResult = my.ora.res, out.dir = de.dir, comp.name = mycomb, geneList = enr.inputs$gsea.genevec)
             }
@@ -597,18 +600,18 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
         ## CELLMARKER
         ### Assess cell types from an online table
         ### NOTE : It's the same way to call the 'gsea.run' / 'ora.run' functions as for MSIGDB, but with a single bank (so, no loop).
-        if (any(cm.do)) {
-          ### GSEA
-          if (cm.do[1]) {
-            my.gsea.res <- try(gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = 'clusterProfiler::GSEA', t2g = cell_markers, t2g.name = 'CellMarker', gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enrp.max, minGSSize = enr.min.genes))
-            if (!is(my.gsea.res, class2 = 'try-error')) gsea.output(gseaResult = my.gsea.res, out.dir = de.dir, comp.name = mycomb)
-          }
-          #### ORA
-          if (cm.do[2]) {
-            my.ora.res <- try(ora.run(gene = enr.inputs$ora.genevec, species = species, func.name = 'clusterProfiler::enricher', t2g = cell_markers, t2g.name = 'CellMarkers', gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enrp.max, minGSSize = enr.min.genes))
-            if (!is(my.ora.res, class2 = 'try-error')) ora.output(enrichResult = my.ora.res, out.dir = de.dir, comp.name = mycomb, geneList = enr.inputs$gsea.genevec)
-          }
-        }
+        # if (any(cm.do)) {
+        #   ### GSEA
+        #   if (cm.do[1]) {
+        #     my.gsea.res <- try(gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = 'clusterProfiler::GSEA', t2g = cell_markers, t2g.name = 'CellMarker', gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enrp.max, minGSSize = enr.min.genes))
+        #     if (!is(my.gsea.res, class2 = 'try-error')) gsea.output(gseaResult = my.gsea.res, out.dir = de.dir, comp.name = mycomb)
+        #   }
+        #   #### ORA
+        #   if (cm.do[2]) {
+        #     my.ora.res <- try(ora.run(gene = enr.inputs$ora.genevec, species = species, func.name = 'clusterProfiler::enricher', t2g = cell_markers, t2g.name = 'CellMarkers', gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enrp.max, minGSSize = enr.min.genes))
+        #     if (!is(my.ora.res, class2 = 'try-error')) ora.output(enrichResult = my.ora.res, out.dir = de.dir, comp.name = mycomb, geneList = enr.inputs$gsea.genevec)
+        #   }
+        # }
         
         ## MESH (WARNING : MEMORY OGRE AND SLOW !! Big DBs, 3 sources, 16 categories ! 64 GB of RAM required for most bases !
         ### Requires additional parameters :
