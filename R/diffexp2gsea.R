@@ -17,7 +17,7 @@
 #### FUNCTIONS ####
 ###################
 
-### FUNCTION TO CONVERT AN msigdbr SPECIES NAME TO AN AnnotationForge ORGANISM PACKAGE ROOTNAME (ie, the package name without the '.db' suffix)
+## FUNCTION TO CONVERT AN msigdbr SPECIES NAME TO AN AnnotationForge ORGANISM PACKAGE ROOTNAME (ie, the package name without the '.db' suffix)
 ### . 'species' : character ; a species name, as in the 'species_name' column of msigdbr::msigdbr_species()
 ### NOTE1 : This converter should work with all available species in msigdbr, with the exception of saccharomyces cerevisiae (which does not have 'eg' in its organism name)
 ### NOTE 2 : See MSigDB collections description here : http://www.gsea-msigdb.org/gsea/msigdb/collections.jsp
@@ -25,7 +25,7 @@ msigdbr2org <- function(species = NULL) {
   return(paste0('org.', paste0(stringr::str_sub(unlist(base::strsplit(species, ' ')), 1, 1), collapse = ''), '.eg'))
 }
 
-### FUNCTION TO LOAD AN MSigDB BANK AND CREATE THE term2gene TABLE
+## FUNCTION TO LOAD AN MSigDB BANK AND CREATE THE term2gene TABLE
 ### . 'species' : character ; a species name, as in the 'species_name' column of msigdbr::msigdbr_species()
 ### . 'category' : character ; an MSigDB category, as in the 'gs_cat' column of msigdbr::msigdbr_collections()
 ### . 'subcategory' : character ; an MSigDB category, as in the 'gs_subcat' column of msigdbr::msigdbr_collections()
@@ -41,7 +41,19 @@ msigdb_to_t2g <- function(species = 'Homo sapiens', category = NULL, subcategory
   return(t2g)
 }
 
-## Function to convert species name WIIIIP !
+
+## FUNCTION TO LOAD A CUSTOM GMT FILE AND CREATE THE term2gene TABLE
+### . 'gmt_file' : character ; complete path to a GMT file
+gmt_to_t2g <- function(gmt_file = NULL) {
+  ## Checking gmt
+  if (!file.exists(gmt_file)) stop('A GMT file is required !')
+  t2g <- clusterProfiler::read.gmt(gmtfile = gmt_file)
+  return(t2g)
+}
+
+
+
+## Function to convert species name
 ### Input is an OrgDb object
 ### Supported types (from, to) = 'SPECIES', 'ORGANISM, 'TAXID'
 convert_species_name <- function(OrgDb = NULL, from = 'SPECIES', to = 'ORGANISM') {
@@ -696,24 +708,24 @@ ora.output <- function(enrichResult = NULL, comp.name = 'TEST', out.dir = getwd(
 # species = 'Homo sapiens'
 # listf <- system("ls -d /home/job/WORKSPACE/B21067_LULA_03_NOMAT01/ANALYSIS/02_NOMAT01_No.CNE_HTG_PIO_NO.OL_ANALYSIS_20210928094213/DE/Clinical/Differential_analysis/adjp.0.05_lfc.0.5/*/*/", intern = TRUE)
 # for (lf in listf) {
-#   deres <- read.table(paste0(lf, '/', basename(lf), '_results.txt'), header = TRUE, sep = "\t", as.is = TRUE)
-#   enr.inputs <- table2enr(deseq2.res.data = deres, geneid.colname = 'Symbol', value.colname = 'log2FoldChange', topN.order.colname = 'padj')
+  # deres <- read.table(paste0(lf, '/', basename(lf), '_results.txt'), header = TRUE, sep = "\t", as.is = TRUE)
+  # enr.inputs <- table2enr(deseq2.res.data = deres, geneid.colname = 'Symbol', value.colname = 'log2FoldChange', topN.order.colname = 'padj')
 #   
 #   out.dir <- lf
-#   comp.name <- basename(lf)
+  # comp.name <- basename(lf)
 #   
-#   message(paste0(basename(dirname(lf)), '::', comp.name))
+  # message(paste0(basename(dirname(lf)), '::', comp.name))
 #   ## GO (Gene Ontology)
 #   ### This one needs some tweaking !
 #   ### GSEA
-#   func.name <- 'clusterProfiler::gseGO'
+  # func.name <- 'clusterProfiler::gseGO'
 #   for (x in c('BP', 'CC', 'MF')) {
 #     message(paste0("\t", func.name, '::', x))
 #     my.gsea.res <- gsea.run(geneList = enr.inputs$gsea.genevec, species = species, func.name = func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enr.min.p, minGSSize = enr.min.genes, OrgDb = get(paste0(msigdbr2org(species), '.db')), ont = x)
 #     my.gsea.res@setType <- paste(c(my.gsea.res@setType, x), collapse = '_')
 #     gsea.output(gseaResult = my.gsea.res, out.dir = out.dir, comp.name = comp.name)
-#     ## Simplify
-#     if(nrow(my.gsea.res) > 1) {
+# #     ## Simplify
+# #     if(nrow(my.gsea.res) > 1) {
 #       my.gsea.res@setType <- x
 #       my.gsea.res <- enrichplot::pairwise_termsim(my.gsea.res)
 #       my.gsea.res.simp <- clusterProfiler::simplify(my.gsea.res, cutoff = 0.7, by = "p.adjust", select_fun = min)
