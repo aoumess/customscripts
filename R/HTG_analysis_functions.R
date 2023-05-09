@@ -53,7 +53,11 @@ int2l10 <- function(x = NULL, epsilon = 1) { log10(x + epsilon)}
 
 ## Converts a vector to a color-numeric vector
 vec2col <- function(x = NULL) {
-  return(as.numeric(as.factor(x))+1)
+  tmp_fac <- as.factor(x)
+  tmp_num <- as.numeric(tmp_fac)
+  tmp_out <- setNames(object = tmp_num, nm = levels(tmp_fac)[tmp_num])
+  return(tmp_out)
+  # return(as.numeric(as.factor(x))+1)
 }
 
 ## Context-colored boxplots
@@ -61,10 +65,13 @@ htg.boxplot <- function(matrix.list = NULL, annot.df = NULL, col.item = NULL, co
   oripar <- par()
   par(xaxs = 'i')
   colorder <- order(col)
+  # colorder <- seq_along(col)
   annot.df <- annot.df[colorder,]
+  legendvec <- sapply(split(x = col,f = names(col), drop = TRUE), unique)
   for(x in seq_along(matrix.list)) {
     matrix.list[[x]] <- matrix.list[[x]][,colorder]
-    boxplot(matrix.list[[x]], col = col[colorder], pch = 20, main = paste0(names(matrix.list)[x], ', colored by ', col.item), ylab = 'log10(counts+1)', xaxs = 'i')
+    boxplot(matrix.list[[x]], col = col[colorder], pch = 20, main = paste0(names(matrix.list)[x], ', colored by ', col.item), ylab = 'log10(counts+1)', xaxs = 'i', xaxt = 'n')
+    legend(x = ncol(matrix.list[[x]]), y = max(matrix.list[[x]], na.rm = TRUE), legend = names(legendvec), fill = legendvec, xjust = 1)
   }
   suppressWarnings(par(oripar))
 }

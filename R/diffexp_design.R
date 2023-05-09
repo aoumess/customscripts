@@ -77,14 +77,89 @@ assess.covar <- function(mat = NULL, annot.df = NULL, factor.names = NULL, conti
   dev.off()
 }
 
+## Converts a factor to a design dataframe to be used in DE.test
+## Function to generated a "full" comparison design from a minimalistic dataframe containing samplenames and factor(s) to compare, to use in DE.test
+## . init_df            [data.frame]      A data.frame with at least 2 columns, one of which should be named as defined in [samples_colname], the others being the factors to use to generate the comparison design
+## . samples_colname    [char]            Name of the column to use from init_df as sample names
+## . covar_colnames     [vec(char)]       Name of the column(s) to use in the design as covariates to regress. They should not be in [init_df] !
+## . add_inverted       [logical]         Add the inverted comparisons of the default factor ones (ie, B_vs_A if A_vs_B is the default one)
+## . add_others         [logical]         Add the 'X vs Other' type of comparisons if the factor has more than 2 levels
+## . only_others        [logical]         Only generate the 'X vs Other' type of comparisons if the factor has more than 2 levels
+full_design_generator <- function(init_df = NULL, samples_colname = NULL, covar_colnames = NULL, add_inverted = TRUE, add_others = TRUE, only_others = FALSE) {
+  
+  ## Checks
+  if(is.null(init_df)) stop('A starting dataframe containing sample names and factors to compare is  required !')
+  if(is.null(samples_colname)) stop('A column name to identify samples in init_df is required !')
+  if(!samples_colname %in% colnames(init_df)) stop('Column name [', samples_colname, '] not found in init_df !')
+  if(!add_others & only_others) stop("Can't restrict to 'vs_Other' comparisons if add_others is not set to TRUE !")
+  
+  ## Cleaning bad chars
+  ### Column names in initial df
+  colnames(init_df) <- gsub(pattern = "\\W", replacement = '.', x = colnames(init_df))
+  ### Content of initial df
+  for (myc in seq_len(ncol(init_df))) init_df[[myc]] <- gsub(pattern = "\\W", replacement = '.', x = init_df[[myc]])
+  ### samples_colname & covar_colnames
+  covar_colnames <- gsub(pattern = "\\W", replacement = '.', x = covar_colnames)
+  samples_colname <- gsub(pattern = "\\W", replacement = '.', x = samples_colname)
+  
+  
+  
+  factor_colnames <- colnames(init_df)[!colnames(init_df) %in% samples_colname]
+  
+  des.df <- sapply(seq_along(factor_colnames), function(f) {
+    factor_name <- factor_colnames[f]
+    message(factor_name)
+    my_factor <- init_df[[factor_name]]
+    if(!is.factor(my_factor)) my_factor <- as.factor(my_factor)
+    
+    mylevels <- levels(my_factor)
+    # combn.res <- if(invert_levels) combn(mylevels, 2) else combn(rev(mylevels), 2)
+    combn.res <- combn(rev(mylevels), 2)
+    if(add_inverted) combn.res <- cbind(combn.res, combn(mylevels, 2))
+    all.combz <- sapply(1:ncol(combn.res), function(x) {list(combn.res[1,x], combn.res[2,x])}, simplify = FALSE)
+    names(all.combz) <- vapply(1:ncol(combn.res), function(x) { paste(combn.res[, x, drop = TRUE], collapse = '_vs_') }, 'a')
+    if(length(mylevels) > 2 & add_others) {
+      XvsO.combz <- sapply(as.character(mylevels), function(x) { list(x, mylevels[!mylevels == x])}, simplify = FALSE)
+      names(XvsO.combz) <- vapply(mylevels, function(x) { paste0(x, '_vs_Other') }, 'a')
+      all.combz <- if(only_others) XvsO.combz else c(all.combz, XvsO.combz)
+      rm(XvsO.combz)
+    }
+  
+    ## Filtering comparisons with a class comprised by an unique sample
+    for (mycomb in names(all.combz)) {
+      class.len <- vapply(all.combz[[mycomb]], function(x) { length(which(my_factor %in% x))}, 1L)
+      if(any(class.len == 1)) all.combz[[mycomb]] <- NULL
+    }
+    
+    ## Generated design table
+    f.df <- sapply(seq_along(all.combz), function(x) {
+      comb_df <- data.frame(
+        'Samples_colname' = samples_colname
+        , 'Covar_colnames' = paste(covar_colnames, collapse = ',')
+        , 'Condition_colname' = factor_name
+        , 'Condition_A' = paste(all.combz[[x]][[1]], collapse = ',')
+        , 'Condition_B' = paste(all.combz[[x]][[2]], collapse = ',')
+        , 'Comparison_name' = names(all.combz)[x]
+      )
+      return(comb_df)
+    }, simplify = FALSE)
+    f.df = Reduce(f = rbind, x = f.df)
+    return(f.df)
+  }, simplify = FALSE)
+  des.df <- Reduce(f = rbind, x = des.df)
+  return(des.df)
+}
 
 
 ## Perform DE analysis & functional enrichment for contrasts in pairs
 ## exp.mat                matrix(integer)     Sample x feature (gene) raw count matrix. Feature names as rownames.
 ## annot.df               data.frame          Sample annotations. Should contain a column with the same entries as colnames(exp.mat)
-## design.df              data.frame          Design of comparisons to perform. Should contain these column names : [Samples_colname] = Column name of sample names ; [Covar_colnames] = Column name(s) of covariates to regress (can be empty if none to regress); [Condition_column] = Column name of factor condition to explore for the differential analysis ; [Condition_A] = levels to consider as the condition A (test) ; [Condition_B] = levels to consider as the condition B (ref) ; [Comparison_name] = Name to use for results output.
+## design.df              data.frame          Design of comparisons to perform. Should contain these column names : [Samples_colname] = Column name of sample names ; [Covar_colnames] = Column name(s) of covariates to regress, coma-separated (can be empty if none to regress); [Condition_colname] = Column name of factor condition to explore for the differential analysis ; [Condition_A] = levels to consider as the condition A (test) ; [Condition_B] = levels to consider as the condition B (ref) ; [Comparison_name] = Name to use for results output.
+## assess.factor          logical             Perform assessment of factor covariates using the provided column name(s) corresponding to factor data columns in annot.df
+## assess.conti           logical             Perform assessment of continuous covariates using the provided column name(s) corresponding to continuous data columns in annot.df
 ## adjp.max               0<numeric<1         BH FDR-adjusted p-value cut-off to consider differential genes as significant
 ## lfc.min                numeric+            Minimal logFoldChange to consider differential genes
+## ihw                    logical             Apply Independent Hypothesis Weighting (see IHW::ihw) [TRUE]
 ## outdir                 character           Path of the output directory
 ## samples.dist.method    character           Name of the distance method to use for the hierarchical clustering of samples
 ## samples.hclust.method  character           Name of the aggregation method to use for the hierarchical clustering of samples
@@ -108,7 +183,7 @@ assess.covar <- function(mat = NULL, annot.df = NULL, factor.names = NULL, conti
 ## boxplots               bool                If TRUE, draw boxplots of or.top.max genes
 ## save.wald              bool                If TRUE, save the DESeq2 object containing the results of the Wald test. This is FALSE by default, as the resulting object can be pretty big.
 ## color.palette          vec(color)          Vector of 3 colors used for the expression heatmap (lower values, middle, higher)
-DE.test <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, adjp.max = 5E-02, lfc.min = .7, ihw = TRUE, lfcShrink = TRUE, enrp.max = 1E-02, enr.min.genes = 10, or.top.max = 100, outdir = getwd(), samples.dist.method = 'spearman', samples.hclust.method = 'ward.D', genes.dist.method = 'spearman', genes.hclust.method = 'ward.D', msigdb.do = c(TRUE, TRUE), do.do = c(TRUE, TRUE), go.do = c(TRUE, TRUE), kegg.do = c(TRUE, TRUE), wp.do = c(TRUE, TRUE), reactome.do = c(TRUE, TRUE), mesh.do = c(FALSE, FALSE), non.redundant = TRUE, species = 'Homo sapiens', dotplot.maxterms = 50, my.seed = 1234L, boxplots = TRUE, save.wald = FALSE, heatmap.palette = c("royalblue3", "ivory", "orangered3"), BPPARAM = BiocParallel::SerialParam()) {
+DE.test <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.factor = NULL, assess.conti = NULL, adjp.max = 5E-02, lfc.min = .7, ihw = TRUE, lfcShrink = TRUE, enrp.max = 1E-02, enr.min.genes = 10, or.top.max = 100, outdir = getwd(), samples.dist.method = 'spearman', samples.hclust.method = 'ward.D', genes.dist.method = 'spearman', genes.hclust.method = 'ward.D', msigdb.do = c(TRUE, TRUE), do.do = c(TRUE, TRUE), go.do = c(TRUE, TRUE), kegg.do = c(TRUE, TRUE), wp.do = c(TRUE, TRUE), reactome.do = c(TRUE, TRUE), mesh.do = c(FALSE, FALSE), non.redundant = TRUE, species = 'Homo sapiens', dotplot.maxterms = 50, my.seed = 1234L, boxplots = TRUE, save.wald = FALSE, heatmap.palette = c("royalblue3", "ivory", "orangered3"), BPPARAM = BiocParallel::SerialParam()) {
   
   if (tolower(species) == 'homo sapiens') {
     Org <- 'org.Hs'
@@ -136,7 +211,10 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, adjp.max 
   ## if some annotation column names provided in design do not exist :
   ### samples :
   if (!all(unique(design.df$Samples_colname) %in% colnames(annot.df))) stop('All provided [Samples_colname] values should be in colnames(annot.df) !')
-  ### covariates :
+  ### covariates (outside design):
+  if (!all(assess.factor %in% colnames(annot.df))) stop('All provided [assess.factor] values should be in colnames(annot.df) !')
+  if (!all(assess.conti %in% colnames(annot.df))) stop('All provided [assess.conti] values should be in colnames(annot.df) !')
+  ### covariates (from design):
   covars <- unique(unlist(lapply(seq_len(nrow(design.df)), function(x) unlist(strsplit(x = as.character(design.df$Covar_colnames[x]), split = ',')))))
   covars <- covars[!is.na(covars)]
   if(!all(is.na(covars))) {
@@ -170,6 +248,14 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, adjp.max 
     cur.exp.mat <- exp.mat
     cur.annot.df <- annot.df
     
+    
+    ## Filtering special characters in cur.cond
+    colnames(cur.annot.df) <- gsub(pattern = "\\W", replacement = '.', x = colnames(cur.annot.df))
+    # message(paste(levels(cur.annot.df[[cur.cond]]), collapse = ' ; '))
+    levels(cur.annot.df[[cur.cond]]) <- gsub(pattern = "\\W", replacement = '.', x = levels(cur.annot.df[[cur.cond]]))
+    # message(paste(levels(cur.annot.df[[cur.cond]]), collapse = ' ; '))
+    
+    
     ## Adjusting the datasets if needed
     ## Handling NAs in current annotation
     na.check <- is.na(cur.annot.df[[cur.cond]])
@@ -185,16 +271,14 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, adjp.max 
     }
     
     ## Forcing a relevel (if some levels were lost)
-    cur.annot.df[[cur.cond]] <- as.factor(as.character(cur.annot.df[[cur.cond]]))
-    levtab <- as.data.frame(table(cur.annot.df[[cur.cond]]), stringsAsFactors = FALSE)
-    levtab <- levtab[order(levtab$Var1),]
-    levtab <- levtab[levtab$Freq > 0,]
-    cur.annot.df[[cur.cond]] <- as.factor(as.character(cur.annot.df[[cur.cond]]))
-    myref <- levels(cur.annot.df[[cur.cond]])[1]
-    cur.annot.df[[cur.cond]] <- relevel(cur.annot.df[[cur.cond]], ref = myref)
-
-    ## Filtering special characters
-    levels(cur.annot.df[[cur.cond]]) <- gsub(pattern = "\\W", replacement = '.', x = levels(cur.annot.df[[cur.cond]]))
+    # cur.annot.df[[cur.cond]] <- as.factor(as.character(cur.annot.df[[cur.cond]]))
+    # levtab <- as.data.frame(table(cur.annot.df[[cur.cond]]), stringsAsFactors = FALSE)
+    # levtab <- levtab[order(levtab$Var1),]
+    # levtab <- levtab[levtab$Freq > 0,]
+    # cur.annot.df[[cur.cond]] <- as.factor(as.character(cur.annot.df[[cur.cond]]))
+    # myref <- levels(cur.annot.df[[cur.cond]])[1]
+    # cur.annot.df[[cur.cond]] <- relevel(cur.annot.df[[cur.cond]], ref = myref)
+    cur.annot.df[[cur.cond]] <- droplevels(cur.annot.df[[cur.cond]])
     
     ## Preparing the table list of all combinations
     # mylevels <- levels(cur.annot.df[[cur.cond]])
@@ -237,19 +321,18 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, adjp.max 
     # saveRDS(object = DE2obj, file = paste0(factor.dir, '/', cur.cond, '_rawcounts.RDS'), compress = 'bzip2')
     saveRDS(object = DE2obj, file = paste0(de.dir, '/', cur.cond, '_rawcounts.RDS'), compress = 'bzip2')
     
-    ## Normalizing by vst (for heatmap only)
+    ## Normalizing by vst (for PCA & heatmap)
     DE2obj.norm <- DESeq2::vst(object = DE2obj, blind = TRUE)
     norm.mat <- SummarizedExperiment::assay(DE2obj.norm)
-    rm(DE2obj.norm)
+    # rm(DE2obj.norm)
     
-    ## Assessing covariates, and regressing if requested
+    ## Assessing DESIGN covariates, and regressing if requested
     if (length(cur.covars) > 0) {
       ### Assessing covariates
       #### Splitting factor and continuous covariates
       factor.colnames <- conti.colnames <- NULL
       for (cn in cur.covars) if (is.factor(DE2obj@colData[[cn]])) factor.colnames <- c(factor.colnames, cn) else if (is.numeric(DE2obj@colData[[cn]])) conti.colnames <- c(conti.colnames, cn) else stop(paste0('Covariate [', cn, '] is neither a factor nor a numeric/integer vector !'))
       #### Assessing covariates
-      # assess.covar(mat = norm.mat, annot.df = as.data.frame(DE2obj@colData), factor.names = c(cur.cond, factor.colnames), conti.names = conti.colnames, red.method = 'pca', ndim.max = round(ncol(norm.mat)/2), center = TRUE, scale = TRUE, out.file = paste0(factor.dir, '/', cur.cond, '_assess_covariates_01_unregressed.png'))
       assess.covar(mat = norm.mat, annot.df = as.data.frame(DE2obj@colData), factor.names = c(cur.cond, factor.colnames), conti.names = conti.colnames, red.method = 'pca', ndim.max = round(ncol(norm.mat)/2), center = TRUE, scale = TRUE, out.file = paste0(de.dir, '/', cur.cond, '_assess_covariates_01_unregressed.png'))
       #### Running limma::removeBatchEffect the good way
       limma.bc.batch2 <- limma.bc.batch1 <- limma.bc.covar <- NULL
@@ -261,19 +344,13 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, adjp.max 
       for (cc in conti.colnames) {
         if (is.null(limma.bc.covar)) limma.bc.covar <- as.matrix(DE2obj@colData[, cc, drop = FALSE]) else limma.bc.covar <- cbind(limma.bc.covar, as.matrix(DE2obj@colData[, cc, drop = FALSE]))
       }
-      # for (bc in covar.colnames) {
-      #   if (is.factor(DE2obj@colData[[bc]])) {
-      #     if (is.null(limma.bc.batch1)) limma.bc.batch1 <- DE2obj@colData[[bc]] else if (is.null(limma.bc.batch2)) limma.bc.batch2 <- DE2obj@colData[[bc]]
-      #   } else if (is.null(limma.bc.covar)) limma.bc.covar <- as.matrix(DE2obj@colData[, bc, drop = FALSE]) else limma.bc.covar <- cbind(limma.bc.covar, as.matrix(DE2obj@colData[, bc, drop = FALSE]))
-      # }
       norm.mat <- limma::removeBatchEffect(x = norm.mat, batch = limma.bc.batch1, batch2 = limma.bc.batch2, covariates = limma.bc.covar, design = model.matrix(as.formula(paste0('~0+', cur.cond)), data = DE2obj@colData))
       
       ### Assessing covariates (after regression)
-      # assess.covar(mat = norm.mat, annot.df = as.data.frame(DE2obj@colData), factor.names = c(cur.cond, factor.colnames), conti.names = conti.colnames, red.method = 'pca', ndim.max = round(ncol(norm.mat)/2), center = TRUE, scale = TRUE, out.file = paste0(factor.dir, '/', cur.cond, '_assess_covariates_02_regressed.png'))
       assess.covar(mat = norm.mat, annot.df = as.data.frame(DE2obj@colData), factor.names = c(cur.cond, factor.colnames), conti.names = conti.colnames, red.method = 'pca', ndim.max = round(ncol(norm.mat)/2), center = TRUE, scale = TRUE, out.file = paste0(de.dir, '/', cur.cond, '_assess_covariates_02_regressed.png'))
     }
     
-    ### PCAs
+    ### PCAs for DESIGN covariates
     for (p in c(cur.cond, cur.covars)) {
       # png(filename = paste0(factor.dir, '/PCA_vst_', p, '.png'), width = 1100, height = 1000)
       png(filename = paste0(de.dir, '/PCA_vst_', p, '.png'), width = 1100, height = 1000)
@@ -281,6 +358,83 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, adjp.max 
       print(ggplot2::autoplot(prcomp(t(norm.mat)), data = as.data.frame(SummarizedExperiment::colData(DE2obj)), colour = p, size = 3))
       dev.off()
     }
+    
+    ## Assessing TEST covariates, and regressing if requested
+    if (any(!is.null(c(assess.factor, assess.conti)))) {
+      test.mat <- SummarizedExperiment::assay(DE2obj.norm)
+      test.dir <- paste0(de.dir, '/Test_covariates')
+      dir.create(test.dir)
+      
+      tmp.annot <- as.data.frame(SummarizedExperiment::colData(DE2obj))
+      ### plot PCA of normalized,unregressed data colored by TEST covariates
+      for (p in unique(c(cur.cond, assess.factor, assess.conti))) {
+        png(filename = paste0(test.dir, '/PCA_vst_UNREGRESSED_col.', p, '.png'), width = 1100, height = 1000)
+        library(ggfortify)
+        print(ggplot2::autoplot(prcomp(t(test.mat)), data = tmp.annot, colour = p, size = 3))
+        dev.off()
+      }
+      
+      ### Plotting UNREGRESSED assessment heatmap
+      assess.covar(mat = test.mat, annot.df = tmp.annot, factor.names = c(cur.cond, assess.factor), conti.names = assess.conti, red.method = 'pca', ndim.max = round(ncol(test.mat)/2), center = TRUE, scale = TRUE, out.file = paste0(test.dir, '/', cur.cond, '_TEST_covariates_01_unregressed.png'))
+      
+      #### Handling continuous covariates
+      for (cc in assess.conti) {
+        message(cc)
+        ## Regression the continuous covariate
+        ber.try <- try(tmp.mat <- limma::removeBatchEffect(x = test.mat, batch = NULL, batch2 = NULL, covariates = tmp.annot[[cc]], design = model.matrix(as.formula(paste0('~0+', cur.cond)), data = DE2obj@colData)), silent = TRUE)
+        if (!is(ber.try, class2 = 'try-error')) {
+          ## Plotting REGRESSED assessment heatmap
+          assess.covar(mat = tmp.mat, annot.df = as.data.frame(DE2obj@colData), factor.names = c(cur.cond, assess.factor), conti.names = assess.conti, red.method = 'pca', ndim.max = round(ncol(tmp.mat)/2), center = TRUE, scale = TRUE, out.file = paste0(test.dir, '/', cur.cond, '_TEST_covariates_02_REGRESSED_', cc, '.png'))
+          ### plot PCA of REGRESSED data colored by cur.cond
+          png(filename = paste0(test.dir, '/PCA_vst_REGRESSED.', cc, '_col.', cur.cond, '.png'), width = 1100, height = 1000)
+          library(ggfortify)
+          print(ggplot2::autoplot(prcomp(t(tmp.mat)), data = as.data.frame(SummarizedExperiment::colData(DE2obj)), colour = cur.cond, size = 3))
+          dev.off()
+        }
+      }
+      
+      #### Handling factor covariates
+      for (fc in assess.factor) {
+        message(fc)
+        ## Regression the continuous covariate
+        ber.try <- try(tmp.mat <- limma::removeBatchEffect(x = test.mat, batch = tmp.annot[[fc]], batch2 = NULL, covariates = NULL, design = model.matrix(as.formula(paste0('~0+', cur.cond)), data = DE2obj@colData)), silent = TRUE)
+        if (!is(ber.try, class2 = 'try-error')) {
+          ## Plotting REGRESSED assessment heatmap
+          assess.covar(mat = tmp.mat, annot.df = tmp.annot, factor.names = c(cur.cond, assess.factor), conti.names = assess.conti, red.method = 'pca', ndim.max = round(ncol(tmp.mat)/2), center = TRUE, scale = TRUE, out.file = paste0(test.dir, '/', cur.cond, '_TEST_covariates_02_REGRESSED_', fc, '.png'))
+          ### plot PCA of REGRESSED data colored by cur.cond
+          png(filename = paste0(test.dir, '/PCA_vst_REGRESSED.', fc, '_col.', cur.cond, '.png'), width = 1100, height = 1000)
+          library(ggfortify)
+          print(ggplot2::autoplot(prcomp(t(tmp.mat)), data = tmp.annot, colour = cur.cond, size = 3))
+          dev.off()
+        }
+      }
+      
+      # #### Running limma::removeBatchEffect the good way
+      # limma.bc.batch2 <- limma.bc.batch1 <- limma.bc.covar <- NULL
+      # ##### Handling factor covariates
+      # for (fc in assess.factor) {
+      #   if (is.null(limma.bc.batch1)) limma.bc.batch1 <- DE2obj@colData[[fc]] else if (is.null(limma.bc.batch2)) limma.bc.batch2 <- DE2obj@colData[[fc]] else message(paste0('Factor [', fc, '] will not be considered for matrix regression by limma::removeBatchEffect as ony 2 factors can be used.'))
+      # }
+      # ##### Handling continuous covariates
+      # for (cc in assess.conti) {
+      #   if (is.null(limma.bc.covar)) limma.bc.covar <- as.matrix(DE2obj@colData[, cc, drop = FALSE]) else limma.bc.covar <- cbind(limma.bc.covar, as.matrix(DE2obj@colData[, cc, drop = FALSE]))
+      # }
+      # test.mat <- limma::removeBatchEffect(x = test.mat, batch = limma.bc.batch1, batch2 = limma.bc.batch2, covariates = limma.bc.covar, design = model.matrix(as.formula(paste0('~0+', cur.cond)), data = DE2obj@colData))
+      # 
+      # ### Assessing covariates (after regression)
+      # assess.covar(mat = test.mat, annot.df = as.data.frame(DE2obj@colData), factor.names = c(cur.cond, assess.factor), conti.names = assess.conti, red.method = 'pca', ndim.max = round(ncol(test.mat)/2), center = TRUE, scale = TRUE, out.file = paste0(test.dir, '/', cur.cond, '_TEST_covariates_02_regressed.png'))
+      # 
+      # ### PCAs for TEST covariates (after regression)
+      # for (p in unique(c(cur.cond, assess.factor, assess.conti))) {
+      #   png(filename = paste0(test.dir, '/PCA_vst_', p, '_02.reg.png'), width = 1100, height = 1000)
+      #   library(ggfortify)
+      #   print(ggplot2::autoplot(prcomp(t(test.mat)), data = as.data.frame(SummarizedExperiment::colData(DE2obj)), colour = p, size = 3))
+      #   dev.off()
+      # }
+    }
+    
+    ## Remove temporary VST object
+    rm(DE2obj.norm)
     
     ## Performing the DE test
     htg.de.wald <- DESeq2::DESeq(DE2obj)
@@ -368,7 +522,12 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, adjp.max 
       dir.create(path = gdir, recursive = TRUE)
       for (g in sig.genes[1:(min(length(sig.genes), or.top.max))]) {
         png(filename = paste0(gdir, '/', g, '_norm.exp_boxplot.png'), width = 800, height = 600)
-        boxplot(norm.mat[g,] ~ SummarizedExperiment::colData(DE2obj)[[cur.cond]], xlab = cur.cond, ylab = 'Normalized expression', main = paste0(g, ' normalized expression VS ', cur.cond, '\nDESeq2 : l2FC = ', round(DEres.df[g, 'log2FoldChange'], digits = 3), ' ; adjP = ', format(DEres.df[g, 'padj'], scientific = TRUE, digits = 3)), col = seq_len(nlevels(SummarizedExperiment::colData(DE2obj)[[cur.cond]]))+1)
+        # boxplot(norm.mat[g,] ~ SummarizedExperiment::colData(DE2obj)[[cur.cond]], xlab = cur.cond, ylab = 'Normalized expression', main = paste0(g, ' normalized expression VS ', cur.cond, '\nDESeq2 : l2FC = ', round(DEres.df[g, 'log2FoldChange'], digits = 3), ' ; adjP = ', format(DEres.df[g, 'padj'], scientific = TRUE, digits = 3)), col = seq_len(nlevels(SummarizedExperiment::colData(DE2obj)[[cur.cond]]))+1)
+        # stripchart(x = norm.mat[g,] ~ SummarizedExperiment::colData(DE2obj)[[cur.cond]], method = 'jitter', vertical = TRUE, add = TRUE, col = 1, pch = 20)
+        
+        sig.split <- split(norm.mat[g, ], droplevels(SummarizedExperiment::colData(DE2obj)[[cur.cond]]))
+        boxplot2l(x = sig.split, col = seq_along(sig.split), main = paste0(g, ' normalized expression VS ', cur.cond, '\nDESeq2 : l2FC = ', round(DEres.df[g, 'log2FoldChange'], digits = 3), ' ; adjP = ', format(DEres.df[g, 'padj'], scientific = TRUE, digits = 3)), xlab = '', ylab = 'Normalized expression', vertical = TRUE, cex = 2)
+        
         dev.off()
       }
     }
@@ -404,18 +563,21 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, adjp.max 
               hc.g <- hclust(amap::Dist(x = plotDat, method = gdm), method = ghm)
               ## Compute heatmap
               set.seed(my.seed)
-              myHM <- suppressMessages(ComplexHeatmap::Heatmap(z.mat, name = "Normalized counts",
+              myHM <- suppressMessages(ComplexHeatmap::Heatmap(z.mat, name = "Normalized counts"
                                                                # use my custom color palette
-                                                               col = myRamp,
+                                                               , col = myRamp
                                                                # do not show gene names
-                                                               show_row_name = TRUE,
+                                                               , show_row_name = TRUE
                                                                # do not clusterize samples
-                                                               cluster_columns = hc.s,
-                                                               cluster_rows = hc.g,
+                                                               , cluster_columns = hc.s
+                                                               , cluster_rows = hc.g
                                                                # add a nice grey border to cells
-                                                               rect_gp = grid::gpar(col = "darkgrey", lwd=0.5),
+                                                               , rect_gp = grid::gpar(col = "darkgrey", lwd=0.5)
                                                                # add sample annotation
-                                                               top_annotation = ha1))
+                                                               , top_annotation = ha1
+                                                               , use_raster = TRUE
+                                                               , raster_device = 'png'
+                                                               ))
               ## Draw heatmap
               png(paste0(de.dir, '/', cur.name, '_sig.', nrow(z.mat), 'x', ncol(z.mat), '_', paste(c(gdm, ghm, sdm, shm), collapse = "_"), '.heatmap.png'), width = min(ncol(z.mat) * 15, 2000) + 200, height = min(length(sig.genes) * 10, 5000) + 300)
               ComplexHeatmap::draw(myHM)
@@ -700,4 +862,26 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, adjp.max 
         }
       }
   }
+}
+
+## Wrapper for boxplots with stripchart, except for outliers [LIST VERSION]
+boxplot2l <- function(x = list(), col = 'lightgray', fill = NULL, main = 'boxplot2', xlab = '', ylab = 'Y', vertical = TRUE, ylim = NULL, cex = 1, line.type = 'medsd') {
+  x.meds <- sapply(x, function(i) { median(i, na.rm = TRUE) })
+  glob.med <- median(unlist(x), na.rm = TRUE)
+  glob.sd <- sd(unlist(x), na.rm = TRUE)
+  x.Q1 <- sapply(x, function(i) { quantile(x = i, probs = .25, na.rm = TRUE) })
+  x.Q3 <- sapply(x, function(i) { quantile(x = i, probs = .75, na.rm = TRUE) })
+  x.IQR <- x.Q3 - x.Q1
+  x.len <- sapply(x, length)
+  x.noO <- lapply(seq_along(x), function(i) { x[[i]][x[[i]] >= (x.Q1[i] - (1.5 * x.IQR[i])) &  (x[[i]] <= x.Q3[i] + (1.5 * x.IQR[i]))] })
+  names(x.noO) <- names(x)
+  ## Setting ylim
+  if (is.null(ylim)) ylim = range(unlist(x), na.rm = TRUE)
+  marb <- round(max(nchar(names(x)))*.75)
+  par(mar=c(marb, 4, 2, 2) + 0.1)
+  boxplot(x = x, col = fill, border = col, main = paste0(main, ' (', sum(x.len), ')'), ylab = ylab, names = NA, lwd = 2, ylim = ylim, pch = 20, cex = cex)
+  stripchart(x = x.noO, method = 'jitter', vertical = vertical, add = TRUE, col = col, pch = 20, cex = cex)
+  if(!is.null(line.type)) { if(line.type == 'medsd') abline(h = glob.med + c(0, glob.sd, -glob.sd), col = 2, lty = c(2,3,3), lwd = 2) else if(line.type == 'quantiles') abline(h = c(x.Q1, x.Q3), col = 2, lty = c(3,3), lwd = 2)
+  }
+  axis(1, at=1:length(x), labels=paste0(names(x), ' (', x.len, ')'), las = 2)
 }

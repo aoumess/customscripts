@@ -170,12 +170,13 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
     }
     
     ## Forcing a relevel (if some levels were lost)
-    levtab <- as.data.frame(table(cur.annot.df[[cur.cond]]), stringsAsFactors = FALSE)
-    levtab <- levtab[order(levtab$Var1),]
-    levtab <- levtab[levtab$Freq > 0,]
-    cur.annot.df[[cur.cond]] <- as.factor(as.character(cur.annot.df[[cur.cond]]))
-    myref <- levels(cur.annot.df[[cur.cond]])[1]
-    cur.annot.df[[cur.cond]] <- relevel(cur.annot.df[[cur.cond]], ref = myref)
+    # levtab <- as.data.frame(table(cur.annot.df[[cur.cond]]), stringsAsFactors = FALSE)
+    # levtab <- levtab[order(levtab$Var1),]
+    # levtab <- levtab[levtab$Freq > 0,]
+    # cur.annot.df[[cur.cond]] <- as.factor(as.character(cur.annot.df[[cur.cond]]))
+    # myref <- levels(cur.annot.df[[cur.cond]])[1]
+    # cur.annot.df[[cur.cond]] <- relevel(cur.annot.df[[cur.cond]], ref = myref)
+    cur.annot.df[[cur.cond]] <- droplevels(cur.annot.df[[cur.cond]])
     
     ## Filtering special characters
     levels(cur.annot.df[[cur.cond]]) <- gsub(pattern = "\\W", replacement = '.', x = levels(cur.annot.df[[cur.cond]]))
@@ -376,20 +377,27 @@ DE.test <- function(exp.mat = NULL, annot.df = NULL, samples.colname = "Sample",
                 hc.g <- hclust(amap::Dist(x = plotDat, method = gdm), method = ghm)
                 ## Compute heatmap
                 set.seed(my.seed)
-                myHM <- suppressMessages(ComplexHeatmap::Heatmap(z.mat, name = "Normalized counts",
+                myHM <- suppressMessages(ComplexHeatmap::Heatmap(z.mat, name = "Normalized counts"
                                                                  # use my custom color palette
-                                                                 col = myRamp,
+                                                                 , col = myRamp
                                                                  # do not show gene names
-                                                                 show_row_name = TRUE,
+                                                                 , show_row_name = TRUE
                                                                  # do not clusterize samples
-                                                                 cluster_columns = hc.s,
-                                                                 cluster_rows = hc.g,
+                                                                 , cluster_columns = hc.s
+                                                                 , cluster_rows = hc.g
                                                                  # add a nice grey border to cells
-                                                                 rect_gp = grid::gpar(col = "darkgrey", lwd=0.5),
+                                                                 , rect_gp = grid::gpar(col = "darkgrey", lwd=0.5)
                                                                  # add sample annotation
-                                                                 top_annotation = ha1))
+                                                                 , top_annotation = ha1
+                                                                 , use_raster = TRUE
+                                                                 , raster_device = 'png'
+                                                                 ))
                 ## Draw heatmap
-                png(paste0(de.dir, '/', mycomb, '_sig.', nrow(z.mat), 'x', ncol(z.mat), '_', paste(c(gdm, ghm, sdm, shm), collapse = "_"), '.heatmap.png'), width = min(ncol(z.mat) * 15, 2000) + 200, height = min(length(sig.genes) * 10, 5000) + 300)
+                out.w <- min(ncol(z.mat) * 15, 2000) + 200
+                out.h <- min(length(sig.genes) * 10, 5000) + 300
+                # ht_opt$raster_temp_image_max_width <- out.w
+                # ht_opt$raster_temp_image_max_height <- out.h
+                png(paste0(de.dir, '/', mycomb, '_sig.', nrow(z.mat), 'x', ncol(z.mat), '_', paste(c(gdm, ghm, sdm, shm), collapse = "_"), '.heatmap.png'), width = out.w, height = out.h)
                 ComplexHeatmap::draw(myHM)
                 dev.off()
               }
