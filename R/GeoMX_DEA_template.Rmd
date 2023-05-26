@@ -1,0 +1,304 @@
+---
+title: "PROJECT"
+author: "Firstname LASTNAME<BR>anyone@gustaveroussy.fr"
+date: "`r format(Sys.time(), '%Y/%m/%d')`"
+output:
+  html_document: 
+    background: black
+    fig_height: 10
+    fig_width: 15
+    highlight: espresso
+    number_sections: yes
+    theme: flatly
+    toc: yes
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+    self_contained: yes
+always_allow_html: yes
+---
+
+# Working environment setup
+
+## Variables
+
+```{r setup, message = FALSE}
+## Dirs
+### Main rootname for dirs
+# root_dir <- '/home/job/WORKSPACE/PROJECTS/B23025_MIBO_01_RT09722_GeoMx/'
+root_dir <- '~'
+### INPUT : dir
+data_dir <- paste0(root_dir, '/DATA')
+### INPUT : filename (MS XLSX)
+data_filename <- 'RT09722_TestRun_BGsub_BC_geomean_20230414.xlsx'
+### Results output dir
+out_dir <- paste0(root_dir, '/RESULTS')
+### ANNOTATION : dir
+annot_dir <- paste0(root_dir, '/gitlab/B23025_MIBO_01/annotation/')
+### ANNOTATION : filename (MS XLSX)
+annot_filename <- 'ROI_GeoMx_RT09722_REFORMATED_20230501.xlsx'
+### ANNOTATION : sample names column
+annot_sn <- 'SegmentDisplayName'
+### Analysis tag name
+# analysis_name <- 'B23025_MIBO_01_RT09722_GeoMx'
+analysis_name <- 'My_analysis'
+
+work_dir <- paste0(out_dir, '/', analysis_name, '_', format(Sys.time(), '%Y%m%d%H%M%S'))
+
+## Other variables
+### LIST of CATEGORICAL/DISCRETE data types to enlight (by split/coloring) in boxplots, and assess as covariates. Keys are displayed names, values are annotation table column names
+box_categ <- list(
+  'BIO ID' = 'BIO_ID'
+  , 'Batch Date' = 'Batch_Date'
+  ,'ROI' = 'ROILabel'
+  , 'ROI shape' = 'ROI_Shape'
+  , 'AOI' = 'AOI_Label'
+  , 'Cell Type' = 'SegmentLabel'
+  , 'Bio Type' = 'AOI_Type'
+  , 'Flag : Low Nuclei' = 'FLAG_LowNuclei'
+  , 'Flag : Low Surface Area' = 'FLAG_LowSurfaceArea'
+  , 'Flag : Low Negative Probe Counts' = 'FLAG_LowNPC'
+  )
+### VECTOR of annotation column names to assess as putative continuous covariates. (this should be changed to a list in further updates, in sake of homogeneity with box_categ)
+conti_categ <- c(
+  'AOISurfaceArea'
+  , 'AOINucleiCount'
+  , 'StitchedReads'
+  , 'SequencingSaturation'
+)
+### Vector of annotation column names to assess as putative discrete covariates [NOTE : yet only one entity at a time is supported !]
+diff_categs <- c('AOI_Type')
+### Name of differential expression analysis comparisons from the design to perform (note : this may have comparisons from multiple different diff_categs entries, as long as there are no name collision !) [NOTE : this may be replaced as a list linked to the diff_categs entries to avoid any problem]
+selec_comp <- c('CI_vs_CIS_far_CI', 'CIS_close_CI_vs_CIS_far_CI', 'stroma_CI_vs_stroma_CIS_far')
+### Number of max different distant colors to generate in the RGB space, for boxplots/PCAs (should cover all possible classes in any of the requested annotation)
+ncolors <- 10
+### Fixing seed
+my_seed <- 1337
+### Residual value to add for raw counts to log conversion 
+epsilon <- 1
+### DESeq2 normalization method (only VST supported yet)
+norm_method <- 'vst'
+### Significance threshold
+adjp.max <- 5E-02
+### Minimum absolute log2FoldChange threshold
+lfc.min <- 1
+
+## Generate a color palette
+set.seed(my_seed)
+listcol <- randomcoloR::distinctColorPalette(k = ncolors, runTsne = if(ncolors > 50) TRUE else FALSE)
+
+## Sourcing outside scripts
+source('/home/job/gits/customscripts/R/HTG_analysis_functions.R')
+source('/home/job/gits/customscripts/R/diffexp_design.R')
+source('/home/job/gits/customscripts/R/diffexp2gsea.R')
+
+## Create output dir
+dir.create(work_dir, recursive = TRUE)
+setwd(work_dir)
+
+## Backup original graphical parameters
+oripar <- par()
+```
+
+## Loading data
+
+```{r data_load}
+
+## Loading data
+geo_df <- readxl::read_excel(path = paste(c(data_dir, data_filename), collapse = '/'), sheet = 'TargetCountMatrix', na = c('', 'na', 'NA'))
+
+## Loading annotations
+annot_df <- readxl::read_excel(path = paste(c(annot_dir, annot_filename), collapse = '/'), na = c('', 'na', 'NA'))
+
+## Synch
+### Convert counts df to matrix
+geo_int <- as.matrix(geo_df[,-1])
+### Sort data by ROI/AOI names
+geo_int <- geo_int[, order(colnames(geo_int))]
+### Sort annotation by ROI/AOI names
+annot_df <- annot_df[order(annot_df[[annot_sn]]),]
+### Restrict data
+geo_int <- geo_int[,colnames(geo_int) %in% annot_df[[annot_sn]]]
+### Restrict annotation
+annot_df <- annot_df[annot_df[[annot_sn]] %in% colnames(geo_int),]
+### Check
+all(colnames(geo_int) == annot_df[[annot_sn]])
+```
+
+
+# Data preprocessing
+
+* Converting counts data to log10(+1).
+
+```{r countmat}
+
+## Correct for false 1
+geo_int <- round(geo_int) - 1
+rownames(geo_int) <- geo_df$TargetName
+saveRDS(geo_int, file = paste0(work_dir, '/rawcounts_', ncol(geo_int), 's.RDS'), compress = 'bzip2')
+
+## Log10 transformation
+geo_l10 <- int2l10(x = geo_int, epsilon = epsilon)
+saveRDS(geo_l10, file = paste0(work_dir, '/l10counts', epsilon, '_', ncol(geo_l10), 's.RDS'), compress = 'bzip2')
+
+```
+
+# RAW QC
+
+## Boxplots
+
+Boxplots of log-transformed raw counts (ie, log10(counts+1)) for control types and expression data.
+
+```{r raw_boxp, message=FALSE}
+
+## RAW Boxplots
+mat2plot <- list(geo_l10)
+names(mat2plot) <- paste0(analysis_name, ' (raw)')
+for (bc in names(box_categ)) htg.boxplot(matrix.list = mat2plot, annot.df = annot_df, col.item = bc, col = vec2col(annot_df[[box_categ[[bc]]]]))
+
+```
+
+*Conclusion* :
+
+* Variability of the raw distribution of gene expression is quite high among samples.
+* CD45 profiles have lower global gene expression than CK.
+* Profiles flagged for 'Low Negative Probe Counts' also exhibit lower global gene expression (though, this should be corrected by normalization a/o handled by DESeq2 in the differential analysis, being a simple scaling problem). 
+
+## Intra-correlation
+
+```{r autocor}
+cor.res <- psych::corr.test(x = geo_l10, method = 'pearson')
+ComplexHeatmap::Heatmap(matrix = cor.res$r, cluster_rows = FALSE, cluster_columns = FALSE, rect_gp = grid::gpar(col = "darkgrey", lwd=0.5), heatmap_legend_param = list(at= c(0,.25, .5, .75, 1)), name = 'Spearman Correlation', column_title = 'Raw counts correlation across samples')
+```
+
+*Conclusion* :
+
+* Profiles exhibit very low internal correlation.
+* The slightest visible effect tends towards intra-slide/biosample correlation, though at a weak level.
+
+# Normalization
+
+Expression is first normalized by computing scaling factors, taking care of batch, then using variance stabilization.
+
+The method used is :
+
+```{r normmethod}
+norm_method
+```
+
+
+```{r norm, message=FALSE}
+## Convert matrix to DESeqDataSet
+de2 <- DESeq2::DESeqDataSetFromMatrix(countData = geo_int, colData = annot_df, design = ~0)
+## Computing size factors and dispersion
+de2 <- DESeq2::estimateSizeFactors(object = de2)
+try(de2 <- DESeq2::estimateDispersions(object = de2))
+saveRDS(de2, file = paste0(work_dir, '/DESeq2Obj_Raw.RDS'), compress = 'bzip2')
+## Normalization
+if (tolower(norm_method) == 'vst') {
+  message('Normalizing using vst ...')
+  de2.norm <- DESeq2::vst(object = de2, blind = TRUE, nsub = 200)
+} else if (tolower(norm_method) == 'rlog') {
+  message('Normalizing using rlog ...')
+  de2.norm <- DESeq2::rlog(object = de2, blind = TRUE)
+}
+geo_norm <- SummarizedExperiment::assay(de2.norm, normalized = TRUE)
+saveRDS(de2.norm, file = paste0(work_dir, '/DESeq2Obj_Norm.', tolower(norm_method), '.RDS'), compress = 'bzip2')
+# ## Removing batch effect (without factor to keep as we currently have no annotation, so creating "Identity")
+# if (remove.batch.effect) {
+#   htg.de2.norm$Identity <- 1
+#   norm.mat <- limma::removeBatchEffect(SummarizedExperiment::assay(htg.de2.norm), htg.de2.norm$HTG_RunID, design = model.matrix(~ Identity, htg.de2.norm@colData@listData))
+#   SummarizedExperiment::assay(htg.de2.norm) <- norm.mat
+#   saveRDS(htg.de2.norm, file = paste0(workdir, '/DESeq2Obj_Norm.', tolower(norm.method), '_BER.Batch.RDS'), compress = 'bzip2')
+# }
+```
+
+# Norm QC
+
+## Boxplot
+
+Boxplot of normalized expression, after normalisation.
+
+```{r norm_boxp, message=FALSE}
+## NORM Boxplot
+mat2plot <- list(geo_norm)
+names(mat2plot) <- paste0(analysis_name, ' (', norm_method, ')')
+for (bc in names(box_categ)) htg.boxplot(matrix.list = mat2plot, annot.df = annot_df, col.item = bc, col = vec2col(annot_df[[box_categ[[bc]]]]))
+```
+
+*Conclusion* :
+
+* The normalization succeeded into increasing the homogeneity of the gene expression profiles with much more homogeneous median distribution.
+* There still remains some variance (spread) differences across samples, with a slightly higher variance in profiles with low raw expression (ie, CD45) a/o flagged for low Negative Control Probe Counts.
+
+## Intra-correlation
+
+```{r autocor_norm}
+cor.res.norm <- psych::corr.test(x = geo_norm, method = 'pearson')
+ComplexHeatmap::Heatmap(matrix = cor.res.norm$r, cluster_rows = FALSE, cluster_columns = FALSE, rect_gp = grid::gpar(col = "darkgrey", lwd=0.5), heatmap_legend_param = list(at= c(0,.25, .5, .75, 1)), name = 'Spearman Correlation', column_title = 'Normalized counts correlation across samples')
+```
+
+**Conclusion** : No obvious change after normalization.
+
+## PCA
+
+PCA is used to evaluate how the data dimensionality could be reduced from our 48 samples. Working on human data, even for this reduced expression set from on an immune panel, we do not expect a high representation of the variance by a very limited set of very first components. It is also used to detect outlier samples, and in best cases gives ideas of the data structure (ie, most evident clusters).
+
+```{r pca, message=FALSE}
+## PCAs on normalized assay
+for (bc in names(box_categ)) {
+  de2.pca.batch <- DESeq2::plotPCA(de2.norm, intgroup = box_categ[[bc]])
+  print(de2.pca.batch + ggplot2::geom_point(data = data.frame(PC1 = get.pca.medoid(myvec = de2.pca.batch$data$PC1, splitvec = de2.pca.batch$data$group), PC2 = get.pca.medoid(myvec = de2.pca.batch$data$PC2, splitvec = de2.pca.batch$data$group), group = unique(de2.pca.batch$data$group)), shape = 13, size = 8) + ggplot2::labs(title = bc))
+}
+
+```
+
+*Conclusion* :
+
+* PC1 represents ~ 58% of the total variance.
+* The variance (PC1) seems mostly driven by the CK/CD45 status.
+* The 'Low Negative Control Probe Counts' flag seems mostly linked to the CD45 status (though imperfectly), which may mean that this is not a technical artifact, as CD45 cells are expected to have a globally lower expression level than CK cells.
+
+# Differential analysis
+
+## Assess covariates
+
+```{r diffexp}
+diff_dir <- paste0(work_dir, '/Differential_analysis')
+dir.create(path = diff_dir, recursive = TRUE)
+assess.covar(mat = geo_norm, annot.df = annot_df, factor.names = unname(unlist(box_categ)), conti.names = conti_categ, red.method = 'pca', ndim.max = 34, center = TRUE, scale = TRUE, out.file = paste0(diff_dir, '/covar_raw.png'))
+
+```
+
+## DESeq2
+
+### Generate the default design table
+
+```{r destab}
+my_des <- full_design_generator(init_df = annot_df[,c(annot_sn, diff_categs)], samples_colname = annot_sn, covar_colnames = NULL, add_inverted = TRUE, add_others = TRUE, only_others = FALSE)
+```
+
+### DEA on selected comparisons
+
+```{r dea_selec}
+selec_dir <- paste0(work_dir, '/SELEC')
+dir.create(selec_dir)
+minides <- my_des[my_des$Comparison_name %in% selec_comp,]
+DE.test(exp.mat = geo_int, annot.df = annot_df, design.df = minides, adjp.max = adjp.max, lfc.min = lfc.min, ihw = TRUE, lfcShrink = TRUE, enrp.max = adjp.max, enr.min.genes = 10, outdir = selec_dir, msigdb.do = c(TRUE, FALSE), do.do = c(TRUE, FALSE), go.do = c(TRUE, FALSE), kegg.do = c(TRUE, FALSE), wp.do = c(TRUE, FALSE), reactome.do = c(TRUE, FALSE), mesh.do = c(FALSE, FALSE), species = 'Homo sapiens', non.redundant = TRUE, my.seed = my_seed, save.wald = TRUE, samples.dist.method = c('spearman', 'euclidean', 'pearson'), assess.factor = unname(unlist(box_categ)), assess.conti = conti_categ)
+
+DE.test(exp.mat = geo_int, annot.df = annot_df, design.df = minides, adjp.max = adjp.max, lfc.min = lfc.min, ihw = TRUE, lfcShrink = TRUE, enrp.max = adjp.max, enr.min.genes = 10, outdir = selec_dir, msigdb.do = c(FALSE, FALSE), do.do = c(FALSE, FALSE), go.do = c(FALSE, FALSE), kegg.do = c(FALSE, FALSE), wp.do = c(FALSE, FALSE), reactome.do = c(FALSE, FALSE), mesh.do = c(FALSE, FALSE), species = 'Homo sapiens', non.redundant = TRUE, my.seed = my_seed, save.wald = TRUE, samples.dist.method = c('spearman', 'euclidean', 'pearson'))
+
+```
+
+### DEA on all possible comparisons
+
+```{r dea_all}
+DE.test(exp.mat = geo_int, annot.df = annot_df, design.df = my_des, adjp.max = adjp.max, lfc.min = lfc.min, ihw = TRUE, lfcShrink = TRUE, enrp.max = adjp.max, enr.min.genes = 10, outdir = work_dir, msigdb.do = c(FALSE, FALSE), do.do = c(FALSE, FALSE), go.do = c(FALSE, FALSE), kegg.do = c(FALSE, FALSE), wp.do = c(FALSE, FALSE), reactome.do = c(FALSE, FALSE), mesh.do = c(FALSE, FALSE), species = 'Homo sapiens', non.redundant = TRUE, my.seed = my_seed, save.wald = TRUE, )
+```
+
+# Rsession
+
+```{r sessioninfo}
+sessionInfo()
+```
+
