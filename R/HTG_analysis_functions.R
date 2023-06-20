@@ -31,25 +31,7 @@ htgxls.import <- function(xls.files = NULL, n.samples = c(24), samplenames.row =
   return(xl.df)
 }
 
-### Compute sparsity level
-sparsity.level <- function(x = NULL, return.value = TRUE) {
-  scprod <- prod(dim(x))
-  # message('Total expressed feature count :')
-  scZ <- sum(sparseMatrixStats::colCounts(x = x, value = 0))
-  # message('\t', scprod - scZ)
-  # message('Sparsity level :')
-  splev <-  scZ / scprod 
-  # message('\t', sprintf('%.5f', splev * 100), '%')
-  if(return.value) return(splev)
-}
 
-### Get PCA medoids
-get.pca.medoid <- function(myvec = NULL, splitvec=NULL, dim = 1) {
-  vapply(unique(splitvec), function(x) { median(myvec[splitvec == x]) }, .1)
-}
-
-## Convert counts to log10(+1)
-int2l10 <- function(x = NULL, epsilon = 1) { log10(x + epsilon)}
 
 ## Converts a vector to a color-numeric vector
 vec2col <- function(x = NULL) {
@@ -57,7 +39,6 @@ vec2col <- function(x = NULL) {
   tmp_num <- as.numeric(tmp_fac)
   tmp_out <- setNames(object = tmp_num, nm = levels(tmp_fac)[tmp_num])
   return(tmp_out)
-  # return(as.numeric(as.factor(x))+1)
 }
 
 ## Context-colored boxplots
@@ -76,22 +57,3 @@ htg.boxplot <- function(matrix.list = NULL, annot.df = NULL, col.item = NULL, co
   suppressWarnings(par(oripar))
 }
 
-## Euclidean-forced wrapper for pvclust
-dist2.euclidean <- function(x = NULL, ...) {
-  amap::Dist(x = t(x), method = 'euclidean', ...)
-}
-
-## Pearson-forced wrapper for pvclust
-dist2.pearson <- function(x = NULL, ...) {
-  amap::Dist(x = t(x), method = 'pearson', ...)
-}
-
-## Spearman-forced wrapper for pvclust
-dist2.spearman <- function(x = NULL, ...) {
-  amap::Dist(x = t(x), method = 'spearman', ...)
-}
-
-## Manhattan-forced wrapper for pvclust
-dist2.manhattan <- function(x = NULL, ...) {
-  amap::Dist(x = t(x), method = 'manhattan', ...)
-}

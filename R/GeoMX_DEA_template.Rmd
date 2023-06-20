@@ -285,9 +285,6 @@ selec_dir <- paste0(work_dir, '/SELEC')
 dir.create(selec_dir)
 minides <- my_des[my_des$Comparison_name %in% selec_comp,]
 DE.test(exp.mat = geo_int, annot.df = annot_df, design.df = minides, adjp.max = adjp.max, lfc.min = lfc.min, ihw = TRUE, lfcShrink = TRUE, enrp.max = adjp.max, enr.min.genes = 10, outdir = selec_dir, msigdb.do = c(TRUE, FALSE), do.do = c(TRUE, FALSE), go.do = c(TRUE, FALSE), kegg.do = c(TRUE, FALSE), wp.do = c(TRUE, FALSE), reactome.do = c(TRUE, FALSE), mesh.do = c(FALSE, FALSE), species = 'Homo sapiens', non.redundant = TRUE, my.seed = my_seed, save.wald = TRUE, samples.dist.method = c('spearman', 'euclidean', 'pearson'), assess.factor = unname(unlist(box_categ)), assess.conti = conti_categ)
-
-DE.test(exp.mat = geo_int, annot.df = annot_df, design.df = minides, adjp.max = adjp.max, lfc.min = lfc.min, ihw = TRUE, lfcShrink = TRUE, enrp.max = adjp.max, enr.min.genes = 10, outdir = selec_dir, msigdb.do = c(FALSE, FALSE), do.do = c(FALSE, FALSE), go.do = c(FALSE, FALSE), kegg.do = c(FALSE, FALSE), wp.do = c(FALSE, FALSE), reactome.do = c(FALSE, FALSE), mesh.do = c(FALSE, FALSE), species = 'Homo sapiens', non.redundant = TRUE, my.seed = my_seed, save.wald = TRUE, samples.dist.method = c('spearman', 'euclidean', 'pearson'))
-
 ```
 
 ### DEA on all possible comparisons

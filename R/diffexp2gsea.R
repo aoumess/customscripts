@@ -265,12 +265,14 @@ gsea.output <- function(gseaResult = NULL, comp.name = 'TEST', out.dir = getwd()
       ## Ridgeplot
       gseaBak <- gseaResult
       gseaResult@result$Description <- gsub(pattern = '_', ' ', gseaResult@result$Description, fixed = TRUE)
-      rip <- enrichplot::ridgeplot(gseaResult, showCategory = ridgeplot)
-      png(paste0(gsea.dir, '/GSEA.ridgeplot.png'), width = 1000, height = (min(length(which(gsea.sig.tf)), ridgeplot) * 20) + 300)
-      suppressMessages(print(rip + ggplot2::ggtitle(paste(c(comp.name, gseaResult@setType, 'GSEA'), collapse = "\n")) + ggplot2::scale_y_discrete(labels=function(x) stringr::str_wrap(x, width=100))))
-      dev.off()
-      gseaResult <- gseaBak
-      rm(gseaBak)
+      rptry <- try(rip <- enrichplot::ridgeplot(gseaResult, showCategory = ridgeplot), silent = TRUE)
+      if (!is(rptry, class2 = 'try-error')) {
+        png(paste0(gsea.dir, '/GSEA.ridgeplot.png'), width = 1000, height = (min(length(which(gsea.sig.tf)), ridgeplot) * 20) + 300)
+        suppressMessages(print(rip + ggplot2::ggtitle(paste(c(comp.name, gseaResult@setType, 'GSEA'), collapse = "\n")) + ggplot2::scale_y_discrete(labels=function(x) stringr::str_wrap(x, width=100))))
+        dev.off()
+        gseaResult <- gseaBak
+        rm(gseaBak)
+      }
     }
     
     ## GSEA plots
