@@ -36,8 +36,8 @@
 
 
 ## Just gives the names of built-in NMF methods in package NMF
-## NOTA : "ls-nmf" and "pe-nmf" seems to fail with my typical datasets...
-nmf.methods.list <- function(echo = FALSE) {
+## NOTA : "ls-nmf" and "pe-nmf" seem to fail with my typical datasets...
+nmf_methods <- function(echo = FALSE) {
   require(NMF)
   nmfm <- nmfAlgorithm()
   if (echo) print(nmfm)

@@ -1,9 +1,9 @@
 ## Set of useful functions
 
 
-#####################
-### GRAPH DEVICES ###
-#####################
+#...........#
+#### I/O ####
+#...........#
 
 ## Opens a "connection" to output plots to a multipage TIFF with rasters
 ## It invisibly writes those plots to individual PNGs
@@ -45,9 +45,9 @@ multipng2pdf <- function(pdfname = NULL, pattern = "abcxyz", clean = TRUE, width
 
 
 
-####################
-### FILE PARSING ###
-####################
+#...............#
+#### PARSING ####
+#...............#
 
 ## Fast file writer using iotools::write.csv.raw but corrected for header handling (~ 5x faster)
 write.table.fast <- function(x, file = NULL, header = TRUE, sep = "\t", fileEncoding="", row.names = FALSE, ...) {
@@ -57,7 +57,7 @@ write.table.fast <- function(x, file = NULL, header = TRUE, sep = "\t", fileEnco
   if (!is.null(trychk)) {
     print("Fast write failed, using canonical write.table ...")
     write.table(x = x, file = file, sep = sep, row.names = row.names, quote = FALSE)
-  }
+  } else stop('Something wrong happened when trying to write file !')
   gc()
 }
 
@@ -113,7 +113,7 @@ hdf5.load <- function (file = NULL) {
 
 ## Function to read a csv/tsv file with data ordered HORIZONTALLY (to a df)
 read.horiz.csv = function(file = NULL, header=TRUE, sep="\t", ...) {
-  n = max(count.fields(file, sep=sep), na.rm=TRUE)
+  n = max(count.fields(file, sep = sep), na.rm=TRUE)
   x = readLines(file)
   .splitvar = function(x, sep, n) {
     var = unlist(strsplit(x, split=sep))
@@ -122,15 +122,15 @@ read.horiz.csv = function(file = NULL, header=TRUE, sep="\t", ...) {
   }
   x = do.call(cbind, lapply(x, .splitvar, sep=sep, n=n))
   x = apply(x, 1, paste, collapse=sep)
-  out = read.csv(text=x, sep=sep, header=header, ...)
+  out = read.csv(text=x, sep=sep, header = header, ...)
   return(out)
 }
 
 
 
-##################
-### CONVERSION ###
-##################
+#..................#
+#### CONVERSION ####
+#..................#
 
 ## This function converts any factor column to a character column in a dataframe
 factors2char.df <- function(df = NULL) {
@@ -198,9 +198,9 @@ chrConv <- function(chrvec = NULL, chr.in = "chrom", chr.out = "chr", alphanumer
 }
 
 
-#########################
-### MATRIX OPERATIONS ###
-#########################
+#.............#
+#### MATHS ####
+#.............#
 
 ## Rotates a matrix (90 degrees, clockwise)
 rotate.matrix.clockwise <- function(mat = NULL) {
@@ -292,11 +292,6 @@ rowIn <- function(mymatrix = NULL, term = NULL) apply(mymatrix, 1, function(x) {
   return(isin)
 })
 
-
-#########################
-### VECTOR OPERATIONS ###
-#########################
-
 ## Interleave two NUMERIC vectors into one
 interleave.numeric <- function(a, b) {
   mNrow <- nrow(cbind(a, b))
@@ -304,9 +299,10 @@ interleave.numeric <- function(a, b) {
   as.numeric(na.exclude(unlist(lapply(split(m, 1:mNrow), as.numeric))))
 }
 
-################
-### PLOTTING ###
-################
+
+#................#
+#### GRAPHICS ####
+#................#
 
 ## Biplots for PCA results
 ## pca.res is an output of prcomp()
@@ -386,9 +382,9 @@ pca3d <- function(pca.res=NULL, compo=1:3, class=NULL, toproj=NULL, adj=1) {
 
 
 
-############
-## SYSTEM ##
-############
+#..............#
+#### SYSTEM ####
+#..............#
 
 ## A more robust way to get machine OS type
 get.os <- function(){
@@ -409,9 +405,9 @@ get.os <- function(){
 
 
 
-##############
-## GENOMICS ##
-##############
+#................#
+#### GENOMICS ####
+#................#
 
 bed2gc <- function(bed = NULL, genome.fasta = NULL, species = "human", genome.build = "hg19", nt.add = 0, keep = "^chr([0-9]+|X|Y)$", ncores = 1) {
 

@@ -54,7 +54,7 @@
 ## CHIFISHER
 ##
 ## Options :
-##    annot.table : path+filename to the annotation table
+##    annot.table : annotation data frame
 ##    query.vec : a vector of column names to use as queries (typicaly the annotations from the unsupervised analyses)
 ##    target.vec : a vector of column names to use as targets (typicaly the clinical annotations)
 ##    test.type : the type of the statistical test to perform. Either "F" or "X2"
@@ -66,7 +66,7 @@ help.chifisher <- function() {
   cat("
 PARAMETERS FOR THE chifisher() FUNCTION :
 -----------------------------------------
-annot.table   = Annotations table (tab-separated plain text).
+annot.table   = Annotations data.frame.
 query.vec     = Vector of query column names (ex: Hclust classes at different cuts).
 target.vec    = Vector of test column names (ex: clinical annotation classes).
 test.type     = Which test to use ('F' for Fisher, 'X2' for X-squared).
@@ -87,14 +87,14 @@ chifisher <- function(annot.table = NULL, query.vec = NULL, target.vec = NULL, t
 
   oridir <- getwd()
 
-  annot <- read.table(annot.table, header = TRUE, sep = "\t", as.is = TRUE, check.names = FALSE, comment.char = "", quote = "")
+  # annot <- read.table(annot.table, header = TRUE, sep = "\t", as.is = TRUE, check.names = FALSE, comment.char = "", quote = "")
   ## Removing dupes in query and target vectors
   query.vec <- unique(query.vec)
   target.vec <- unique(target.vec)
   final <- matrix(NA, nrow=length(target.vec), ncol=length(query.vec))
   for (k1 in 1:length(query.vec)) {
     colclass <- query.vec[k1]
-    ccnum <- which(colnames(annot) == colclass)
+    ccnum <- which(colnames(annot.table) == colclass)
     if (length(ccnum) == 0) {
       cat("Resquested query column [", colclass, "] could not be found !\n", sep="")
       next
@@ -103,7 +103,7 @@ chifisher <- function(annot.table = NULL, query.vec = NULL, target.vec = NULL, t
       cat("Requested query column ", colclass ," exists ", length(ccnum), " times !\nCan't choose ...\n", sep="")
       next
     } else {
-      classes <- as.factor(annot[,ccnum])
+      classes <- as.factor(annot.table[,ccnum])
       ncateg <- nlevels(classes)
       tpv <- vector()
       # outname <- paste(test.type, "-TEST_", colclass, sfix,".txt", sep="")
@@ -117,7 +117,7 @@ chifisher <- function(annot.table = NULL, query.vec = NULL, target.vec = NULL, t
         ## Else :
         message(paste0("Crossing [", query.vec[k1], "] with [", target.vec[k2], "] ..."))
         ct <- target.vec[k2]
-        ctnum <- which(colnames(annot) == ct)
+        ctnum <- which(colnames(annot.table) == ct)
         # message(ctnum)
         if (length(ctnum) == 0) {
           message(paste0("Resquested target column [", ct, "] could not be found !"))
@@ -133,7 +133,7 @@ chifisher <- function(annot.table = NULL, query.vec = NULL, target.vec = NULL, t
           wdir <- paste0(out.dir, '/', query.vec[k1], "/", target.vec[k2])
           dir.create(path = wdir, recursive = TRUE, showWarnings = FALSE)
 
-          if (numeric.as.continuous & (is.numeric(annot[,ctnum]))) {
+          if (numeric.as.continuous & (is.numeric(annot.table[,ctnum]))) {
 
             test.type.X <- ""
 
@@ -142,11 +142,11 @@ chifisher <- function(annot.table = NULL, query.vec = NULL, target.vec = NULL, t
 
               ## T-test
               if (test.type.2 == "T") {
-                Tres <- t.test(annot[,ctnum] ~ classes)
+                Tres <- t.test(annot.table[,ctnum] ~ classes)
               }
               ## Wilcoxon
               if ((ncateg == 2) & (test.type.2 == "W")) {
-                Tres <- wilcox.test(annot[,ctnum] ~ classes)
+                Tres <- wilcox.test(annot.table[,ctnum] ~ classes)
               }
             }
             if (ncateg > 2) {
@@ -155,13 +155,13 @@ chifisher <- function(annot.table = NULL, query.vec = NULL, target.vec = NULL, t
 
               if (test.type.N == "ANOVA") {
                 ## ANOVA
-                test.lm <- lm(annot[,ctnum] ~ classes)
+                test.lm <- lm(annot.table[,ctnum] ~ classes)
                 Tres <- anova(test.lm)
                 Tres$p.value <- Tres$"Pr(>F)"[1]
               }
               ## Kruskal-Wallis
               if ((ncateg > 2) & (test.type.N == "KW")) {
-                Tres <- kruskal.test(annot[,ctnum] ~ classes)
+                Tres <- kruskal.test(annot.table[,ctnum] ~ classes)
               }
             }
 
@@ -170,9 +170,9 @@ chifisher <- function(annot.table = NULL, query.vec = NULL, target.vec = NULL, t
 
             # class.summary <- as.data.frame(t(sapply(unique(classes[!is.na(classes)]), function(x) { c(summary(annot[classes == x, ctnum]), length(which(classes == x)), sd(annot[which(classes == x), ctnum]), Tres$statistic, Tres$p.value) }, simplify = TRUE)))
             class.summary <- as.data.frame(t(sapply(unique(classes[!is.na(classes)]), function(x) {
-              smry.res <- summary(annot[classes == x, ctnum])
+              smry.res <- summary(annot.table[classes == x, ctnum])
               smry.res <- smry.res[names(smry.res) != "NA's"]
-              return(c(smry.res, length(which(classes == x)), sd(annot[which(classes == x), ctnum]), Tres$statistic, Tres$p.value) )
+              return(c(smry.res, length(which(classes == x)), sd(annot.table[which(classes == x), ctnum]), Tres$statistic, Tres$p.value) )
               }, simplify = TRUE)))
             # return(class.summary)
             # colnames(class.summary) <- c("Min", "Q1", "Median", "Mean", "Q3", "Max", "N", "Sd", paste0(test.type.X, c(".score", ".p.value")))
@@ -185,15 +185,15 @@ chifisher <- function(annot.table = NULL, query.vec = NULL, target.vec = NULL, t
 
 
             rcon <- file(paste0(outname, ".txt"), "w")
-            writeLines(paste(c(colnames(annot)[ctnum], colnames(class.summary)), collapse = "\t"), rcon)
+            writeLines(paste(c(colnames(annot.table)[ctnum], colnames(class.summary)), collapse = "\t"), rcon)
             close(rcon)
             write.table(class.summary, file = paste0(outname, ".txt"), quote = FALSE, row.names = TRUE, col.names = FALSE, sep="\t", append = TRUE)
 
             if (make.plot) {
-              mycounts <- vapply(sort(unique(annot[[query.vec[k1]]])), function(x) { length(which(annot[[query.vec[k1]]] == x))}, 1)
+              mycounts <- vapply(sort(unique(annot.table[[query.vec[k1]]])), function(x) { length(which(annot.table[[query.vec[k1]]] == x))}, 1)
               library(ggplot2)
-              ymin <- min(annot[[target.vec[k2]]], na.rm = TRUE) - (diff(range(annot[[target.vec[k2]]], na.rm = TRUE))*.05)
-              p <- ggplot2::qplot(factor(annot[[query.vec[k1]]]), annot[[target.vec[k2]]], geom = "violin", trim = FALSE, scale = "count", fill = factor(annot[[query.vec[k1]]]), xlab = query.vec[k1], ylab = target.vec[k2]) + geom_boxplot(width=.2) + ggplot2::geom_jitter(width = 0) + ggplot2::guides(fill=FALSE) + annotate("text", x = sort(unique(annot[[query.vec[k1]]])), y = ymin, label = mycounts, vjust = 2)
+              ymin <- min(annot.table[[target.vec[k2]]], na.rm = TRUE) - (diff(range(annot.table[[target.vec[k2]]], na.rm = TRUE))*.05)
+              p <- ggplot2::qplot(factor(annot.table[[query.vec[k1]]]), annot.table[[target.vec[k2]]], geom = "violin", trim = FALSE, scale = "count", fill = factor(annot.table[[query.vec[k1]]]), xlab = query.vec[k1], ylab = target.vec[k2]) + geom_boxplot(width=.2) + ggplot2::geom_jitter(width = 0) + ggplot2::guides(fill=FALSE) + annotate("text", x = sort(unique(annot.table[[query.vec[k1]]])), y = ymin, label = mycounts, vjust = 2)
               ggplot2::ggsave(filename = paste0(outname, "_gg.png"), width = 15, height = 15, units = "cm", plot = p)
             }
 
@@ -202,7 +202,7 @@ chifisher <- function(annot.table = NULL, query.vec = NULL, target.vec = NULL, t
           } else {
 
             outname <- paste(wdir, "/", test.type, "-TEST_", colclass, sfix, sep="")
-            groups <- as.factor(annot[,ctnum])
+            groups <- as.factor(annot.table[,ctnum])
 
             vtm <- clab <- tlab <- vector()
             # clab <- paste(colclass, levels(classes), sep=".")

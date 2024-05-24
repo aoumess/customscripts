@@ -12,7 +12,7 @@ PROTOCOL="%RNA%"
 ## Initialize the iRods connexion
 iinit
 ## Get list of available datasets [PFB TYPE]
-COLLECLIST=(`imeta qu -C 'projectName' like '${PFGID}' and   and 'protocol' like ${PROTOCOL} | grep -v '\-\-\-\-' | awk -F ': ' '{print $2}'`)
+COLLECLIST=(`imeta qu -C 'projectName' like ${PFGID} and 'protocol' like ${PROTOCOL} | grep -v '\-\-\-\-' | awk -F ': ' '{print $2}'`)
 ## Get list of files per dataset_id
 mkdir -p ${DATADIR}
 echo -n > "${DATADIR}/${PFGRUN}_filelist"
