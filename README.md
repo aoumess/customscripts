@@ -53,17 +53,7 @@ Requires DESeq2 and clusterProfiler packages, and functions from customscripts/R
 
 ### diffexp.R
 
-Set of functions to perform differential gene expression using DESeq2.
-Additional function also allows to assess covariate, in a way to evaluate which to regress towards inceasing the expected biological signal.
-
-### diffexp_design.R (NEWER)
-
-Same as diffexp.R, but using a design table (more convenient, allows a fine control of compared entities).
-
-### diffexp2gsea.R
-
-Automate GSEA/ORA functional annotation and analysis, based on clusterProfiler/DOSE.
-Compatible with MSigDb (thanks to the msigdbr package), KEGG, GO, DO, WikiPathways, Reactome, KEGG/MKEGG, Mesh
+Library of functions with whatever is related to gene expression analysis (differential expression, GSEA, GSVA, immune deconvolution, ...)
 
 ### EaCoN_TCN_GIS_autoscorer.R
 
