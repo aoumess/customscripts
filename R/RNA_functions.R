@@ -832,8 +832,10 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
     # factor.dir <- paste(c(fac.dir, paste0('adjp.', adjp.max, '_lfc.', lfc.min), my.textform), collapse = '/')
     factor.dir <- paste(c(fac.dir, my.textform), collapse = '/')
     # dir.create(path = factor.dir, recursive = TRUE)
+    
     de.dir <- paste(c(factor.dir, cur.name), collapse = '/')
-    dir.create(path = de.dir, recursive = TRUE)
+    cut.dir <- paste(c(de.dir, paste0('adjp.', adjp.max, '_lfc.', lfc.min)), collapse = '/')
+    dir.create(path = cut.dir, recursive = TRUE)
     
     ## Filtering features
     message('Features filtering ...')
@@ -1075,9 +1077,6 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
     message(mycoef)
     message(cur.name)
     
-    # de.dir <- paste(c(factor.dir, cur.name), collapse = '/')
-    # dir.create(path = de.dir, recursive = TRUE)
-    
     ## Getting results table for current contrast
     # mycontrast <- sapply(all.combz[[mycomb]], function(x) { paste0(cur.cond, x)}, simplify = FALSE)
     # mycontrast <- list(cur.condA, cur.condB)
@@ -1103,21 +1102,21 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
     # rm(htg.de.wald)
     
     ## Histogram of P-values
-    png(paste0(de.dir, '/', cur.name, '_phist.png'), width = 2048, height = 768)
+    png(paste0(cut.dir, '/', cur.name, '_phist.png'), width = 2048, height = 768)
     par <- par(mfrow = c(1, 2))
     hist(DEres$pvalue, col = "lightblue", main = paste0("Histogram of raw P-values (DESeq2)\n", mycoef), breaks = 100, xlim = c(0,1), xlab = "P-value")
     hist(DEres$padj, col = "lightblue", main = paste0("Histogram of BH-adjusted P-values (DESeq2)\n", mycoef), breaks = 100, xlim = c(0,1), xlab = "P-value")
     abline(v = adjp.max, col = 2, lty = 2)
     dev.off()
-    
+
     ## MAplot
-    png(paste0(de.dir, '/', cur.name, '_MA.png'), width = 1024, height = 768)
+    png(paste0(cut.dir, '/', cur.name, '_MA.png'), width = 1024, height = 768)
     DESeq2::plotMA(DEres, alpha = adjp.max, main = paste0("M-A Plot\n", mycoef), cex = 1)
     dev.off()
     
     ## Volcano plot
     deg.idx <- DEres$padj <= adjp.max & abs(DEres$log2FoldChange) >= lfc.min
-    png(paste0(de.dir, '/', cur.name, '_volcano.png'), width = 1024, height = 768)
+    png(paste0(cut.dir, '/', cur.name, '_volcano.png'), width = 1024, height = 768)
     plot(x = DEres$log2FoldChange, y = -log10(DEres$padj), xlab = "log2(Fold-Change)", ylab = "-log10(adjusted P-value)", col = ifelse(deg.idx, "red", "black"), main = paste0("Volcano plot\n", mycoef), pch = 20)
     grid()
     abline(h = -log10(adjp.max), lty = 2, col = 4)
@@ -1145,12 +1144,11 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
     DEres.df[[sig.word]] <- 0
     DEres.df[[sig.word]][deg.idx] <- 1
     DEres.df <- DEres.df[order(DEres.df$padj, abs(DEres.df$log2FoldChange), decreasing = c(FALSE, TRUE)),]
-    write.table(DEres.df, file = gzfile(paste0(de.dir, '/', cur.name, '_results.tsv.gz')), sep = '\t', quote = FALSE, row.names = FALSE)
-    WriteXLS::WriteXLS(x = DEres.df, ExcelFileName = paste0(de.dir, '/', cur.name, '_results.xlsx'), SheetNames = cur.name, AdjWidth = TRUE, AutoFilter = TRUE, BoldHeaderRow = TRUE, FreezeCol = 1, FreezeRow = 1, na = c(NA, '', 'NA', 'na'))
+    write.table(DEres.df, file = gzfile(paste0(cut.dir, '/', cur.name, '_results.tsv.gz')), sep = '\t', quote = FALSE, row.names = FALSE)
+    WriteXLS::WriteXLS(x = DEres.df, ExcelFileName = paste0(cut.dir, '/', cur.name, '_results.xlsx'), SheetNames = cur.name, AdjWidth = TRUE, AutoFilter = TRUE, BoldHeaderRow = TRUE, FreezeCol = 1, FreezeRow = 1, na = c(NA, '', 'NA', 'na'))
     
     sig.genes <- as.character(DEres.df$Symbol[DEres.df[sig.word] == 1])
     
-    cut.dir <- paste(c(de.dir, paste0('adjp.', adjp.max, '_lfc.', lfc.min)), collapse = '/')
     ## Draw gene boxplot
     if(boxplots & length(sig.genes) > 0) {
       gdir <- paste0(cut.dir, '/boxplots')
@@ -1262,7 +1260,10 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
     }
     
     ## Functional enrichment
-    if (any(unlist(msigdb.do), kegg.do, do.do, go.do, wp.do, reactome.do, mesh.do) & length(which(deg.idx)) >= enr.min.genes & !is.null(species)) {
+    ### Handle cases (force GSEA, minimum genes requirement, etc...)
+    ## Convert all ".go" into a matrix
+    # gsea_go <- 
+    if (any(unlist(msigdb.do), kegg.do, do.do, go.do, wp.do, reactome.do, mesh.do, custom.do) & length(which(deg.idx)) >= enr.min.genes & !is.null(species)) {
       
       enr.inputs <- table2enr(deseq2.res.data = DEres.df, species = species, geneid.colname = 'Symbol', geneid.type = 'SYMBOL', stat.colname = 'log2FoldChange', topN.max = or.top.max, p.colname = 'padj', p.cutoff = adjp.max, stat.keep.operator = '>', stat.abs = TRUE, stat.cutoff = lfc.min)
       
@@ -1320,7 +1321,7 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
                   my.gsea.res.simp@setType <- paste(c(func.name, x, 'simplified'), collapse = '_')
                   gsea_output(gseaResult = my.gsea.res.simp, out.dir = cut.dir, comp.name = cur.name)
                 } else {
-                  my.gsea.res.simp@setType <- paste(c(func.name, x), collapse = '_')
+                  my.gsea.res@setType <- paste(c(func.name, x), collapse = '_')
                   gsea_output(gseaResult = my.gsea.res, out.dir = cut.dir, comp.name = cur.name)
                 }
               }
@@ -1345,7 +1346,7 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
                   my.ora.res.simp@ontology <- paste(c(func.name, x, 'simplified'), collapse = '_')
                   ora_output(enrichResult = my.ora.res.simp, out.dir = cut.dir, comp.name = cur.name, geneList = enr.inputs$gsea.genevec)
                 } else {
-                  my.ora.res.simp@ontology <- paste(c(func.name, x), collapse = '_')
+                  my.ora.res@ontology <- paste(c(func.name, x), collapse = '_')
                   ora_output(enrichResult = my.ora.res, out.dir = cut.dir, comp.name = cur.name, geneList = enr.inputs$gsea.genevec)
                 }
               }
@@ -1506,13 +1507,13 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
             if(custom.do[1]) {
               ### GSEA
               func.name <- 'clusterProfiler::GSEA'
-              my.gsea.res <- gsea_run(geneList = enr.inputs$gsea.genevec, organism = species, func.name = func.name, t2g = custom_gmt_list[[cdb]], t2g.name = cdb, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enrp.max, minGSSize = enr.min.genes)
+              my.gsea.res <- gsea_run(geneList = enr.inputs$gsea.genevec, species = species, func.name = func.name, t2g = custom_gmt_list[[cdb]], t2g.name = cdb, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enrp.max, minGSSize = enr.min.genes)
               gsea_output(gseaResult = my.gsea.res, out.dir = cut.dir, comp.name = cur.name)
             }
             if(custom.do[2]) {
               ### ORA
               func.name <- 'clusterProfiler::enricher'
-              my.ora.res <- ora_run(gene = enr.inputs$ora.genevec, organism = species, func.name = func.name, t2g = custom_gmt_list[[cdb]], t2g.name = cdb, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enrp.max, minGSSize = enr.min.genes)
+              my.ora.res <- ora_run(gene = enr.inputs$ora.genevec, species = species, func.name = func.name, t2g = custom_gmt_list[[cdb]], t2g.name = cdb, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enrp.max, minGSSize = enr.min.genes)
               ora_output(enrichResult = my.ora.res, out.dir = cut.dir, comp.name = cur.name, geneList = enr.inputs$gsea.genevec)
             }
           }
