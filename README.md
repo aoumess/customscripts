@@ -51,7 +51,7 @@ Normalization of a RAW COUNTS DEseq2 object (DESeqDataSet) with vst, returns the
 Extra parameters (...) are passe to DESeq2::vst()
 Requires DESeq2 and clusterProfiler packages, and functions from customscripts/R/diffexp2gsea_design.R
 
-### diffexp.R
+### RNA_functions.R
 
 Library of functions with whatever is related to gene expression analysis (differential expression, GSEA, GSVA, immune deconvolution, ...)
 
