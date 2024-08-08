@@ -1,94 +1,73 @@
 ## NEXTCLOUD
-NCUSER='B_JOB'
-NCCRED=${NCUSER}':Z03F4nny!0107'
-NCROOTDIR='https://nextcloud.gustaveroussy.fr/remote.php/dav/files/B_JOB/'
+# FLUSER='b_job'
+FLUSER=${USER}
 
 ## PARAMETERS
-R1CODE='R1'
-R2CODE='R2'
+FRCODE='R1'
+RRCODE='R2'
 MINBASEQ=20  # MINIMUM BASE QUALITY FOR FILTERING
 ZCOMP=6
-ADAPTERSFASTA='/mnt/beegfs/scratch/bioinfo_core/B20029_SOGA_02/data_input/RESOURCES/ADAPTERS/ADAPTERS_CONCAT.fa'
+## FastqScreen
 FASTQSCREENCONF='/mnt/beegfs/database/bioinfo/Index_DB/Fastq_Screen/0.14.0/fastq_screen.conf'
-MYTMP='/mnt/beegfs/userdata/b_job/mytmp/'
-MYGITSREP='/mnt/beegfs/userdata/b_job/gits/'
-NCDIR='https://nextcloud.gustaveroussy.fr/remote.php/dav/files/B_JOB/B20067_FRDA_05/'
-
-
+## Fastp
+ADAPTERSFASTA="/mnt/beegfs/userdata/${FLUSER}/RESOURCES/ADAPTERS/CONCAT.fa"
+MYTMP="/mnt/beegfs/userdata/${FLUSER}/mytmp/"
+MYGITSREP="/mnt/beegfs/userdata/${FLUSER}/gits/"
 
 ## PATHS
 
-### P29_AUMA
-PFBPROJECTNAME='B20067_FRDA_05'
-PFGPROJECTNAME='P29_AUMA'
-RUNNAME='CONCATENATED'
-SNAMEBLOCKS="1,2"  # PART(S) OF THE FASTQ FILENAMES THAT WILL FORM THE SAMPLENAME
+### PROJECT (BIGR)
+PFBPROJECTNAME='B24033_LULA_01'
 
-### P30_AUMA
-PFBPROJECTNAME='B20067_FRDA_05'
-PFGPROJECTNAME='P30_AUMA'
-# RUNNAME='191114_A00461_0089_AHM7J3DMXX'
-# RUNNAME='191202_A00461_0091_AHHYJHDRXX'
-# RUNNAME='191216_A00461_0093_BHJGCTDRXX'
-# RUNNAME='200109_A00461_0099_BHJM2GDRXX'
-# RUNNAME='200130_A00461_0102_BHJNG3DRXX'
-RUNNAME='CONCATENATED'
-SNAMEBLOCKS="1,2"  # PART(S) OF THE FASTQ FILENAMES THAT WILL FORM THE SAMPLENAME
+### RUN01
+PFGPROJECTNAME='RT18822_RNASeq_Batch62'
+RUNNAME='240426_A00461_0558_BH7FV3DRX5'
 
-### P31_DELE
-PFBPROJECTNAME='B21002_DELE_01'
-PFGPROJECTNAME='P31_DELE'
-RUNNAME='210211_A00461_0161_AH2KTKDRXY'
-SNAMEBLOCKS="1,2"
+## MAIN DIRS
+### WHERE THE RAW FASTQ FILES SHOULD END to init the analysis
+INDIR="/mnt/beegfs/scratch/bioinfo_core/${PFBPROJECTNAME}/data_input/"
+RAWDATADIR="${INDIR}/${PFGPROJECTNAME}/${RUNNAME}/"
+### WORKING DIRECTORY
+OUTDIR="/mnt/beegfs/scratch/bioinfo_core/${PFBPROJECTNAME}/data_output/"
+WORKDIR="${OUTDIR}/${PFGPROJECTNAME}/"
 
-## COMMON
-INDIR='/mnt/beegfs/scratch/bioinfo_core/'${PFBPROJECTNAME}'/data_input/'
-OUTDIR='/mnt/beegfs/scratch/bioinfo_core/'${PFBPROJECTNAME}'/data_output/'
-RAWDATADIR=${INDIR}'/'${PFGPROJECTNAME}'/'${RUNNAME}
-WORKDIR=${OUTDIR}'/'${PFGPROJECTNAME}'/'${RUNNAME}
 RAWQCDIR=${WORKDIR}'/RAW_QC'
-TRIMDIR=${WORKDIR}'/TRIM'
 SALMONDIR=${WORKDIR}'/SALMON'
 IMMUNEDIR=${WORKDIR}'/IMMUNE'
 
-
-## Creating project dir
+## Nextcloud (requires a 'nextcloud_credentials.txt' file in the user home, set as chmod 700, which contains the user password)
+NCUSER=`echo ${FLUSER} | tr '[:lower:]' '[:upper:]'`
+source "/home/${FLUSER}@intra.igr.fr/nextcloud_credentials.txt"
+NCCRED="${NCUSER}:${NCPWD}"
+NCROOTDIR="https://nextcloud.gustaveroussy.fr/remote.php/dav/files/${NCUSER}/transfert_bigr/"
 NCOUTDIRA=${NCROOTDIR}'/'${PFBPROJECTNAME}
 curl --user ${NCCRED} -X MKCOL $NCOUTDIRA
-NCOUTDIRB=${NCOUTDIRA}'/'${PFGPROJECTNAME}
+NCOUTDIR=${NCOUTDIRA}'/'${RUNNAME}
 curl --user ${NCCRED} -X MKCOL $NCOUTDIRB
-NCOUTDIR=${NCOUTDIRB}'/'${RUNNAME}'/'
-curl --user ${NCCRED} -X MKCOL $NCOUTDIR
 
-# NCOUTDIR=${NCROOTDIR}'/'${PFBPROJECTNAME}'/'${PFGPROJECTNAME}'/'${RUNNAME}'/'
 
 ## GENERATING SAMPLENAMES
-SNARRAY=`ls ${RAWDATADIR}/*.f*q* | xargs -n 1 basename | cut -d "_" -f ${SNAMEBLOCKS}`
-SNAMES=`printf "%s\n" "${SNARRAY[@]}" | sort -u`
+SNARRAY=(`ls ${RAWDATADIR}/*.f*q* | xargs -n 1 basename | sed  's/_S.*.f*q*//'`)
+SNAMES=(`printf "%s\n" "${SNARRAY[@]}" | sort -u`)
+echo ${SNAMES[@]}
 
 ## PER-RUN RAW QC
 NTHREADS=2
 MEM=5
 conda activate readsqc
-mkdir -p ${RAWQCDIR}'/fastqc' ${RAWQCDIR}'/fastqscreen' ${RAWQCDIR}'/multiqc' ${RAWQCDIR}'/logs'
+mkdir -p ${RAWQCDIR}'/fastqc' ${RAWQCDIR}'/multiqc' ${RAWQCDIR}'/logs'
 cd ${RAWQCDIR}
 for SAMPLENAME in ${SNAMES[@]}; do {
 	echo ${SAMPLENAME};
 	TOOLEO='rawqc'
-	sbatch --mem=${MEM}'G' --cpus-per-task=${NTHREADS} --tasks=1 --nodes=1 -J ${TOOLEO}'.'${SAMPLENAME} \
-	-e ${RAWQCDIR}'/logs/'${SAMPLENAME}'_'${TOOLEO}'.e' -o ${RAWQCDIR}'/logs/'${SAMPLENAME}'_'${TOOLEO}'.o' --wrap \
-	"fastqc -o ${RAWQCDIR}/fastqc -t ${NTHREADS} ${RAWDATADIR}/*${SAMPLENAME}*_${R1CODE}*.f*gz \
-	${RAWDATADIR}/*${SAMPLENAME}*_${R2CODE}*.f*gz && \
-	fastq_screen --threads ${NTHREADS} --force --outdir ${RAWQCDIR}/fastqscreen --subset 100000 \
-	--conf ${FASTQSCREENCONF} ${RAWDATADIR}/*${SAMPLENAME}*_${R1CODE}*.f*gz && \
-	multiqc -n RAW_${SAMPLENAME} -i ${PROJECTNAME}' '$SAMPLENAME' RAW FASTQ' -z -f -o ${RAWQCDIR}'/multiqc' ${RAWQCDIR}/fastqscreen/*${SAMPLENAME}* ${RAWQCDIR}/fastqc/*${SAMPLENAME}*.zip"
+	sbatch --mem=${MEM}'G' --cpus-per-task=${NTHREADS} --tasks=1 --nodes=1 -J ${TOOLEO}'.'${SAMPLENAME} -e ${RAWQCDIR}'/logs/'${SAMPLENAME}'_'${TOOLEO}'.e' -o ${RAWQCDIR}'/logs/'${SAMPLENAME}'_'${TOOLEO}'.o' --wrap "fastqc -o ${RAWQCDIR}/fastqc -t ${NTHREADS} ${RAWDATADIR}/*${SAMPLENAME}*_${FRCODE}*.f*q* ${RAWDATADIR}/*${SAMPLENAME}*_${RRCODE}*.f*q*"
 }
 done
 
 NTHREADS=3
 MEM=5
 sbatch --mem=${MEM}'G' --cpus-per-task=${NTHREADS} --tasks=1 --nodes=1 -J 'mqc_RAWQC' -e ${RAWQCDIR}'/logs/'${PFBPROJECTNAME}'_mqc_raw.e' -o ${RAWQCDIR}'/logs/'${PFBPROJECTNAME}'_mqc_raw.o' --wrap \
-"multiqc -n ${PFBPROJECTNAME}_${RUNNAME}_RAW_QC -i ${PFBPROJECTNAME}' ALL FASTQ RAW' -z -f -o ${RAWQCDIR} ${RAWQCDIR}/fastqc/*${R1CODE}*.zip ${RAWQCDIR} ${RAWQCDIR}/fastqc/*${R2CODE}*.zip ${RAWQCDIR}/fastqscreen/*.txt"
+"multiqc -n ${PFBPROJECTNAME}_${RUNNAME}_RAW_QC -i ${PFBPROJECTNAME}' ALL FASTQ RAW' -z -f -o ${RAWQCDIR} ${RAWQCDIR}/fastqc/*${FRCODE}*.zip ${RAWQCDIR} ${RAWQCDIR}/fastqc/*${RRCODE}*.zip ${RAWQCDIR}/fastqscreen/*.txt"
 conda deactivate
 
 ## Sending report to NC
@@ -101,27 +80,6 @@ zip -r -9 --exclude='*.zip' ${WORKDIR}'/'${PFBPROJECTNAME}'_'${PFGPROJECTNAME}'_
 ### Sending zip to NC
 curl -u ${NCCRED} -T ${WORKDIR}'/'${PFBPROJECTNAME}'_'${PFGPROJECTNAME}'_'${RUNNAME}'_RAW_QC.zip' ${NCOUTDIR}
 
-## TRIMMING
-NTHREADS=5
-MEM=10
-mkdir -p ${TRIMDIR}'/fastp_report/' ${TRIMDIR}'/logs/' ${TRIMDIR}'/failed_reads/'
-conda activate fastp
-cd ${TRIMDIR}
-for SAMPLENAME in ${SNAMES[@]}; do {
-  echo ${SAMPLENAME};
-  sbatch --mem=${MEM}'G' --cpus-per-task=${NTHREADS} --tasks=1 --nodes=1 -J 'trim.'${SAMPLENAME} -e ${TRIMDIR}'/logs/'${SAMPLENAME}'_trim.e' -o ${TRIMDIR}'/logs/'${SAMPLENAME}'_trim.o' --wrap \
-  "fastp -i ${RAWDATADIR}/${SAMPLENAME}*_${R1CODE}*.f*.gz -I ${RAWDATADIR}/${SAMPLENAME}*_${R2CODE}*.f*.gz \
-  -o ${TRIMDIR}/${SAMPLENAME}'_'${R1CODE}'_trim.fq.gz' -O ${TRIMDIR}/${SAMPLENAME}'_'${R2CODE}'_trim.fq.gz' \
-  --unpaired1 ${TRIMDIR}/failed_reads/${SAMPLENAME}'_'${R1CODE}'_unp.fq.gz' \
-	--unpaired2 ${TRIMDIR}/failed_reads/${SAMPLENAME}'_'${R2CODE}'_unp.fq.gz' \
-  --failed_out ${TRIMDIR}/failed_reads/${SAMPLENAME}'_fail.fq.gz' \
-	-z ${ZCOMP} --adapter_fasta ${ADAPTERSFASTA} --trim_poly_g \
-  --cut_tail --cut_tail_mean_quality ${MINBASEQ} --length_required 36 --n_base_limit 3 --qualified_quality_phred ${MINBASEQ} -p \
-  --thread ${NTHREADS} --html ${TRIMDIR}/fastp_report/${SAMPLENAME}'_fastp.html' --json ${TRIMDIR}/fastp_report/${SAMPLENAME}'_fastp.json'"
-}
-done
-conda deactivate
-
 ## QC post-trim
 NTHREADS=3
 MEM=5
@@ -132,10 +90,10 @@ for SAMPLENAME in ${SNAMES[@]}; do {
 	TOOLEO='trimqc'
 	sbatch --mem=${MEM}'G' --cpus-per-task=${NTHREADS} --tasks=1 --nodes=1 -J ${TOOLEO}'.'${SAMPLENAME} \
 	-e ${TRIMDIR}'/logs/'${SAMPLENAME}'_'${TOOLEO}'.e' -o ${TRIMDIR}'/logs/'${SAMPLENAME}'_'${TOOLEO}'.o' --wrap \
-	"fastqc -o ${TRIMDIR}/fastqc -t ${NTHREADS} ${TRIMDIR}/*${SAMPLENAME}*_${R1CODE}*_trim.fq.gz \
-	${TRIMDIR}/*${SAMPLENAME}*_${R2CODE}*_trim*.fq.gz && \
+	"fastqc -o ${TRIMDIR}/fastqc -t ${NTHREADS} ${TRIMDIR}/*${SAMPLENAME}*_${FRCODE}*_trim.fq.gz \
+	${TRIMDIR}/*${SAMPLENAME}*_${RRCODE}*_trim*.fq.gz && \
   fastq_screen --threads ${NTHREADS} --force --outdir ${TRIMDIR}/fastqscreen --subset 100000 \
-	--conf ${FASTQSCREENCONF} ${TRIMDIR}/*${SAMPLENAME}*_${R1CODE}*_trim.f*gz && \
+	--conf ${FASTQSCREENCONF} ${TRIMDIR}/*${SAMPLENAME}*_${FRCODE}*_trim.f*gz && \
 	multiqc -n TRIM_${SAMPLENAME} -i ${PROJECTNAME}' '$SAMPLENAME' FASTQ TRIMMED' -z -f -o ${TRIMDIR}'/multiqc' ${TRIMDIR}/fastqc/*${SAMPLENAME}*.zip ${TRIMDIR}/fastqscreen/*${SAMPLENAME}* ${TRIMDIR}/fastp_report/*${SAMPLENAME}*.json"
 }
 done
@@ -268,18 +226,18 @@ curl -u ${NCCRED} -T ${WORKDIR}'/'${PFBPROJECTNAME}'_dge.zip' ${NCOUTDIR}
 #
 # /mnt/beegfs/scratch/bioinfo_core/B20067_FRDA_05/data_output/P30_AUMA/CONCATENATED/SALMON//pseudo_mapping/*creening*/quant.sf
 #
-# ls ${FASTQDIR30}/*creening*trim.fq.gz ${FASTQDIR30}/*C2J1*trim.fq.gz > $WORKDIR'/FQlist.txt'
-# ls ${FASTQDIR29}/13*creening*trim.fq.gz ${FASTQDIR29}/13*C2J1*trim.fq.gz >> $WORKDIR'/FQlist.txt'
+# ls ${INDIR30}/*creening*trim.fq.gz ${INDIR30}/*C2J1*trim.fq.gz > $WORKDIR'/FQlist.txt'
+# ls ${INDIR29}/13*creening*trim.fq.gz ${INDIR29}/13*C2J1*trim.fq.gz >> $WORKDIR'/FQlist.txt'
 #
 # ## Manual editting of the FQlist to remove samples that do not belong to a pair
 #
 #
-# FASTQDIR30='/mnt/beegfs/scratch/bioinfo_core/B20067_FRDA_05/data_output/P30_AUMA/CONCATENATED/TRIM'
-# FASTQDIR29='/mnt/beegfs/scratch/bioinfo_core/B20067_FRDA_05/data_output/P29_AUMA/CONCATENATED/TRIM'
-# TRIMFILES30=`ls ${FASTQDIR30}/*creening*trim.fq.gz ${FASTQDIR30}/*C2J1*trim.fq.gz`
+# INDIR30='/mnt/beegfs/scratch/bioinfo_core/B20067_FRDA_05/data_output/P30_AUMA/CONCATENATED/TRIM'
+# INDIR29='/mnt/beegfs/scratch/bioinfo_core/B20067_FRDA_05/data_output/P29_AUMA/CONCATENATED/TRIM'
+# TRIMFILES30=`ls ${INDIR30}/*creening*trim.fq.gz ${INDIR30}/*C2J1*trim.fq.gz`
 # SNARRAY30=`echo ${TRIMFILES30} | xargs -n 1 basename | cut -d "_" -f ${SNAMEBLOCKS}`
 # SNAMES30=`printf "%s\n" "${SNARRAY30[@]}" | sort -u`
-# TRIMFILES29=`ls ${FASTQDIR29}/13*creening*trim.fq.gz ${FASTQDIR29}/13*C2J1*trim.fq.gz`
+# TRIMFILES29=`ls ${INDIR29}/13*creening*trim.fq.gz ${INDIR29}/13*C2J1*trim.fq.gz`
 # SNARRAY29=`echo ${TRIMFILES29} | xargs -n 1 basename | cut -d "_" -f ${SNAMEBLOCKS}`
 # SNAMES29=`printf "%s\n" "${SNARRAY29[@]}" | sort -u`
 #
