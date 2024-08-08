@@ -267,11 +267,11 @@ get_medoid <- function(x = NULL, split = NULL) {
 matrix_sparsity <- function(mat = NULL) {
   sparse_list <- list(
     ## Global sparsity
-    global = coop::sparsity(x = mat)
+    global = coop::sparsity(x = mat),
     ## Per-sample
-    ,columns <- matrixStats::colCounts(x = mat, value = 0) / nrow(mat)
+    columns = matrixStats::colCounts(x = mat, value = 0) / nrow(mat),
     ## Per-feature
-    ,rows <- matrixStats::rowCounts(x = mat, value = 0) / ncol(mat)
+    rows = matrixStats::rowCounts(x = mat, value = 0) / ncol(mat)
   )
   return(sparse_list)
 }
@@ -420,8 +420,7 @@ pipe2enr <- function(deseq2.res.file = NULL, ...) {
 
 ## Normalize a RAW COUNTS DEseq2 object (DESeqDataSet) with vst, return the normalized counts matrix.
 ## Extra parameters (...) are passed to DESeq2::vst()
-## Requires DESeq2 and clusterProfiler packages, and functions from customscripts/R/diffexp2gsea.R
-# source('/home/job/gits/customscripts/R/diffexp2gsea.R')
+## Requires DESeq2 and clusterProfiler packages# source('/home/job/gits/customscripts/R/diffexp2gsea.R')
 DE2obj_to_norm_mat <- function(DE2obj = NULL, feature_in = 'ENSEMBL', feature_out = 'SYMBOL', species = 'Homo sapiens', out.dir = getwd(), ...) {
   ## Normalizing (vst)
   DE2obj.norm <- DESeq2::vst(object = DE2obj, ...)
@@ -772,8 +771,8 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
   if(!is.logical(per_class)) stop('per_class should be a logical !')
   
   
-  library(DESeq2)
-  library(SummarizedExperiment)
+  suppressPackageStartupMessages(library(DESeq2))
+  suppressPackageStartupMessages(library(SummarizedExperiment))
   suppressPackageStartupMessages(library(ComplexHeatmap))
   suppressPackageStartupMessages(library(circlize))
   
@@ -837,23 +836,63 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
     cut.dir <- paste(c(de.dir, paste0('adjp.', adjp.max, '_lfc.', lfc.min)), collapse = '/')
     dir.create(path = cut.dir, recursive = TRUE)
     
+    # ## Filtering features (BAK)
+    # message('Features filtering ...')
+    # message('Features PRE : ', nrow(cur.exp.mat))
+    # if (per_class) {
+    #   ## Minimum counts criterion
+    #   ff_min <- as.data.frame(lapply(c(cur.condA, cur.condB), function(cc) {
+    #     ccs <- cur.annot.df[[cur.cond]] == cc
+    #     return(base::rowSums(x = cur.exp.mat[,ccs]) >= min_count)
+    #   }))
+    #   ## Minimum expressed samples criterion
+    #   sf_min <- as.data.frame(lapply(c(cur.condA, cur.condB), function(cc) {
+    #     ccs <- cur.annot.df[[cur.cond]] == cc
+    #     return(length(which(ccs)) - matrixStats::rowCounts(x = cur.exp.mat[,ccs], value = 0) >= min(min_samples, length(which(ccs))))
+    #   }))
+    #   ff_feats <- base::rowSums(ff_min) > 0
+    #   sf_feats <- base::rowSums(sf_min) > 0
+    #   ok_feats <- ff_feats & sf_feats
+    # } else {
+    #   ok_feats <- base::rowSums(cur.exp.mat) >= min_count
+    # }
+    # cur.exp.mat <- cur.exp.mat[ok_feats,]
+    # message('Features POST : ', nrow(cur.exp.mat))
+    
     ## Filtering features
     message('Features filtering ...')
     message('Features PRE : ', nrow(cur.exp.mat))
+    cf_min <- data.frame(COVAR = rep(FALSE, nrow(cur.exp.mat)))
     if (per_class) {
       ## Minimum counts criterion
       ff_min <- as.data.frame(lapply(c(cur.condA, cur.condB), function(cc) {
         ccs <- cur.annot.df[[cur.cond]] == cc
-        return(base::rowSums(x = cur.exp.mat[,ccs]) >= min_count)
+        return(base::rowSums(x = cur.exp.mat[,ccs, drop = FALSE]) >= min_count)
       }))
+      colnames(ff_min) <- c(cur.condA, cur.condB)
+      ## Handling factor covariates
+      for (cc in cur.covars) {
+        if(is.factor(cur.annot.df[[cc]])) {
+          cur.annot.df[[cc]] <- droplevels(cur.annot.df[[cc]])
+          tmp_min <- as.data.frame(lapply(levels(cur.annot.df[[cc]]), function(x) {
+            ccs <- cur.annot.df[[cc]] == x
+            return(base::rowSums(x = cur.exp.mat[,ccs, drop = FALSE]) == 0)
+          }))
+          colnames(tmp_min) <- levels(cur.annot.df[[cc]])
+          cf_min <- cbind(cf_min, tmp_min)
+        }
+      }
+      # message(str(cf_min))
       ## Minimum expressed samples criterion
       sf_min <- as.data.frame(lapply(c(cur.condA, cur.condB), function(cc) {
         ccs <- cur.annot.df[[cur.cond]] == cc
         return(length(which(ccs)) - matrixStats::rowCounts(x = cur.exp.mat[,ccs], value = 0) >= min(min_samples, length(which(ccs))))
       }))
+      colnames(sf_min) <- c(cur.condA, cur.condB)
       ff_feats <- base::rowSums(ff_min) > 0
+      cf_feats <- base::rowSums(cf_min) == 0
       sf_feats <- base::rowSums(sf_min) > 0
-      ok_feats <- ff_feats & sf_feats
+      ok_feats <- ff_feats & sf_feats & cf_feats
     } else {
       ok_feats <- base::rowSums(cur.exp.mat) >= min_count
     }
@@ -869,7 +908,7 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
     saveRDS(object = DE2obj, file = paste0(de.dir, '/', cur.cond, '_rawcounts.RDS'), compress = 'bzip2')
     
     ## Normalizing by vst (for PCA & heatmap)
-    DE2obj.norm <- DESeq2::vst(object = DE2obj, blind = TRUE)
+    DE2obj.norm <- DESeq2::vst(object = DE2obj, blind = TRUE, nsub = 1000)
     norm.mat <- SummarizedExperiment::assay(DE2obj.norm)
     ## Save VST matrix 
     write.table(x = data.frame(Feature = rownames(norm.mat), norm.mat, check.names = FALSE), file = gzfile(paste0(de.dir, '/Normalized.vst_matrix.tsv.gz')), sep = '\t', quote = FALSE, row.names = FALSE)
@@ -987,28 +1026,30 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
         
         #### Testing if design matrix is full-rank
         test.covariates <- tmp.annot[[cc]]
-        test.design = model.matrix(as.formula(paste0('~0+', cur.cond)), data = DE2obj@colData)
-        test.covariates <- as.matrix(test.covariates)
-        test.designX = as.matrix(cbind(test.design, test.covariates))
-        ne <- limma::nonEstimable(test.designX)
-        rm(test.covariates, test.designX)
-        
-        if(!is.null(ne)) {
-          message(paste(ne, collapse = ', '))
-          ## Matrix is NOT full-rank, NO regression !
-          message("Can't estimate ", cc, ' as design matrix is not full-rank !')
-          # print(paste0("Can't estimate ", cc, ' as design matrix is not full-rank !'))
-        } else {
-          ## Regressing the continuous covariate
-          ber.try <- try(tmp.mat <- limma::removeBatchEffect(x = test.mat, batch = NULL, batch2 = NULL, covariates = tmp.annot[[cc]], design = model.matrix(as.formula(paste0('~0+', cur.cond)), data = DE2obj.norm@colData)), silent = TRUE)
-          if (!is(ber.try, class2 = 'try-error')) {
-            ## Plotting REGRESSED assessment heatmap
-            try(assess_covar(mat = tmp.mat, annot.df = as.data.frame(DE2obj@colData), factor.names = c(cur.cond, assess.factor), conti.names = assess.conti, red.method = 'pca', ndim.max = round(ncol(tmp.mat)/2), center = TRUE, scale = TRUE, out.file = paste0(Atest.dir, '/', cur.cond, '_TEST_covariates_02_REGRESSED_', cc, '.png')))
-            ### plot PCA of REGRESSED data colored by cur.cond
-            png(filename = paste0(Rtest.dir, '/PCA_vst_REGRESSED.limma.', cc, '_col.', cur.cond, '.png'), width = 1100, height = 1000)
-            library(ggfortify)
-            try(print(ggplot2::autoplot(prcomp(t(tmp.mat)), data = as.data.frame(SummarizedExperiment::colData(DE2obj)), colour = cur.cond, size = 3)), silent = TRUE)
-            dev.off()
+        if(all(!is.na(test.covariates))) {
+          test.design = model.matrix(as.formula(paste0('~0+', cur.cond)), data = DE2obj@colData)
+          test.covariates <- as.matrix(test.covariates)
+          test.designX = as.matrix(cbind(test.design, test.covariates))
+          ne <- limma::nonEstimable(test.designX)
+          rm(test.covariates, test.designX)
+          
+          if(!is.null(ne)) {
+            message(paste(ne, collapse = ', '))
+            ## Matrix is NOT full-rank, NO regression !
+            message("Can't estimate ", cc, ' as design matrix is not full-rank !')
+            # print(paste0("Can't estimate ", cc, ' as design matrix is not full-rank !'))
+          } else {
+            ## Regressing the continuous covariate
+            ber.try <- try(tmp.mat <- limma::removeBatchEffect(x = test.mat, batch = NULL, batch2 = NULL, covariates = tmp.annot[[cc]], design = model.matrix(as.formula(paste0('~0+', cur.cond)), data = DE2obj.norm@colData)), silent = TRUE)
+            if (!is(ber.try, class2 = 'try-error')) {
+              ## Plotting REGRESSED assessment heatmap
+              try(assess_covar(mat = tmp.mat, annot.df = as.data.frame(DE2obj@colData), factor.names = c(cur.cond, assess.factor), conti.names = assess.conti, red.method = 'pca', ndim.max = round(ncol(tmp.mat)/2), center = TRUE, scale = TRUE, out.file = paste0(Atest.dir, '/', cur.cond, '_TEST_covariates_02_REGRESSED_', cc, '.png')))
+              ### plot PCA of REGRESSED data colored by cur.cond
+              png(filename = paste0(Rtest.dir, '/PCA_vst_REGRESSED.limma.', cc, '_col.', cur.cond, '.png'), width = 1100, height = 1000)
+              library(ggfortify)
+              try(print(ggplot2::autoplot(prcomp(t(tmp.mat)), data = as.data.frame(SummarizedExperiment::colData(DE2obj)), colour = cur.cond, size = 3)), silent = TRUE)
+              dev.off()
+            }
           }
         }
       }
@@ -1164,7 +1205,7 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
     ## Setting a color palette for the heatmaps
     myRamp <- circlize::colorRamp2(c(-2, 0, 2), heatmap.palette)
     
-    if (length(sig.genes) > enr.min.genes) {
+    if (length(sig.genes) >= enr.min.genes & length(sig.genes) < 2000) {
       
       cur.annot <- as.data.frame(SummarizedExperiment::colData(DE2obj)[,c(cur.cond, cur.covars), drop = FALSE])
       # cur.samples.idx <- cur.annot[[cur.cond]] %in% unlist(all.combz[[mycomb]])
@@ -1174,6 +1215,7 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
       plotDat <- norm.mat[rownames(norm.mat) %in% sig.genes,]
       # plotDat <- norm.mat[rownames(norm.mat) %in% sig.genes, SummarizedExperiment::colData(DE2obj)[[cur.cond]] %in% unlist(all.combz[[mycomb]])]
       z.mat <- (plotDat - rowMeans(plotDat)) / matrixStats::rowSds(plotDat)
+      
       # Creating sample annotation
       # ha1 = ComplexHeatmap::HeatmapAnnotation(df = SummarizedExperiment::colData(DE2obj)[,c(cur.cond, covar.colnames), drop = FALSE][SummarizedExperiment::colData(DE2obj)[[cur.cond]] %in% unlist(all.combz[[mycomb]]),])
       
@@ -1220,9 +1262,14 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
     ## Shorter heatmap if more sig genes than requested "topN"
     if(length(sig.genes) > or.top.max) {
       
+      cur.annot <- as.data.frame(SummarizedExperiment::colData(DE2obj)[,c(cur.cond, cur.covars), drop = FALSE])
+      
       ## Heatmap
       ## data to plot
-      sig.genes <- as.character(DEres.df$Symbol[DEres.df[[sig.word]] == 1][1:or.top.max])
+      sig.genes <- sig.genes[1:or.top.max]
+      
+      # sig.genes <- as.character(DEres.df$Symbol[DEres.df[[sig.word]] == 1][1:or.top.max])
+      
       # sig.genes <- as.character(DEres.df$Symbol[DEres.df$cuts.in == 1][1:or.top.max])
       # plotDat <- norm.mat[rownames(norm.mat) %in% sig.genes, cur.samples.idx]
       plotDat <- norm.mat[rownames(norm.mat) %in% sig.genes,]
@@ -1290,13 +1337,13 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
           if (msigdb.do[[mc]][1]) {
             my.gsea.res <- try(gsea_run(geneList = enr.inputs$gsea.genevec, species = species, func.name = 'clusterProfiler::GSEA', t2g = my.t2g, t2g.name = msc, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enrp.max, minGSSize = enr.min.genes))
             ## Generate plots / outputs
-            if (!is(my.gsea.res, class2 = 'try-error')) gsea_output(gseaResult = my.gsea.res, out.dir = cut.dir, comp.name = cur.name)
+            if (!is(my.gsea.res, class2 = 'try-error')) gsea_output(gseaResult = my.gsea.res, out.dir = cut.dir, comp.name = cur.name, heatplot = dotplot.maxterms, dotplot = dotplot.maxterms, barplot = dotplot.maxterms, gsea.plot = dotplot.maxterms, ridgeplot = dotplot.maxterms)
           }
           ### ORA
           if(msigdb.do[[mc]][2]) {
             my.ora.res <- try(ora_run(gene = enr.inputs$ora.genevec, universe = unname(enr.inputs$gene2Symbol), species = species, func.name = 'clusterProfiler::enricher', t2g = my.t2g, t2g.name = msc, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enrp.max, minGSSize = enr.min.genes))
             ## Generate plots / outputs
-            if (!is(my.ora.res, class2 = 'try-error')) ora_output(enrichResult = my.ora.res, out.dir = cut.dir, comp.name = cur.name, geneList = enr.inputs$gsea.genevec)
+            if (!is(my.ora.res, class2 = 'try-error')) if (!is.null(my.ora.res)) ora_output(enrichResult = my.ora.res, out.dir = cut.dir, comp.name = cur.name, geneList = enr.inputs$gsea.genevec, heatplot = dotplot.maxterms, dotplot = dotplot.maxterms, barplot = dotplot.maxterms)
           }
         }
       }
@@ -1319,10 +1366,10 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
                 my.gsea.res.simp <- clusterProfiler::simplify(my.gsea.res, cutoff = 0.7, by = "p.adjust", select_fun = min)
                 if(nrow(my.gsea.res.simp) < nrow(my.gsea.res)) {
                   my.gsea.res.simp@setType <- paste(c(func.name, x, 'simplified'), collapse = '_')
-                  gsea_output(gseaResult = my.gsea.res.simp, out.dir = cut.dir, comp.name = cur.name)
+                  gsea_output(gseaResult = my.gsea.res.simp, out.dir = cut.dir, comp.name = cur.name, heatplot = dotplot.maxterms, dotplot = dotplot.maxterms, barplot = dotplot.maxterms, gsea.plot = dotplot.maxterms, ridgeplot = dotplot.maxterms)
                 } else {
                   my.gsea.res@setType <- paste(c(func.name, x), collapse = '_')
-                  gsea_output(gseaResult = my.gsea.res, out.dir = cut.dir, comp.name = cur.name)
+                  gsea_output(gseaResult = my.gsea.res, out.dir = cut.dir, comp.name = cur.name, heatplot = dotplot.maxterms, dotplot = dotplot.maxterms, barplot = dotplot.maxterms, gsea.plot = dotplot.maxterms, ridgeplot = dotplot.maxterms)
                 }
               }
             }
@@ -1344,10 +1391,10 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
                 my.ora.res.simp <- clusterProfiler::simplify(my.ora.res, cutoff = 0.7, by = "p.adjust", select_fun = min)
                 if(nrow(my.ora.res.simp) < nrow(my.ora.res)) {
                   my.ora.res.simp@ontology <- paste(c(func.name, x, 'simplified'), collapse = '_')
-                  ora_output(enrichResult = my.ora.res.simp, out.dir = cut.dir, comp.name = cur.name, geneList = enr.inputs$gsea.genevec)
+                  ora_output(enrichResult = my.ora.res.simp, out.dir = cut.dir, comp.name = cur.name, geneList = enr.inputs$gsea.genevec, heatplot = dotplot.maxterms, dotplot = dotplot.maxterms, barplot = dotplot.maxterms)
                 } else {
                   my.ora.res@ontology <- paste(c(func.name, x), collapse = '_')
-                  ora_output(enrichResult = my.ora.res, out.dir = cut.dir, comp.name = cur.name, geneList = enr.inputs$gsea.genevec)
+                  ora_output(enrichResult = my.ora.res, out.dir = cut.dir, comp.name = cur.name, geneList = enr.inputs$gsea.genevec, heatplot = dotplot.maxterms, dotplot = dotplot.maxterms, barplot = dotplot.maxterms)
                 }
               }
             }
@@ -1361,13 +1408,13 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
         if (do.do[1]) {
           for (x in c('DOSE::gseDO', 'DOSE::gseNCG', 'DOSE::gseDGN')) {
             my.gsea.res <- try(gsea_run(geneList = enr.inputs$gsea.genevec, species = species, func.name = x, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enrp.max, minGSSize = enr.min.genes))
-            if (!is(my.gsea.res, class2 = 'try-error')) gsea_output(gseaResult = my.gsea.res, out.dir = cut.dir, comp.name = cur.name)
+            if (!is(my.gsea.res, class2 = 'try-error')) gsea_output(gseaResult = my.gsea.res, out.dir = cut.dir, comp.name = cur.name, heatplot = dotplot.maxterms, dotplot = dotplot.maxterms, barplot = dotplot.maxterms, gsea.plot = dotplot.maxterms, ridgeplot = dotplot.maxterms)
           }
           ### ORA
           if(do.do[2]) {
             for (x in c('DOSE::enrichDO', 'DOSE::enrichNCG', 'DOSE::enrichDGN')) {
               my.ora.res <- try(ora_run(gene = enr.inputs$ora.genevec, species = species, func.name = x, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enrp.max, minGSSize = enr.min.genes))
-              if (!is(my.ora.res, class2 = 'try-error')) ora_output(enrichResult = my.ora.res, out.dir = cut.dir, comp.name = cur.name, geneList = enr.inputs$gsea.genevec)
+              if (!is(my.ora.res, class2 = 'try-error')) if (!is.null(my.ora.res)) ora_output(enrichResult = my.ora.res, out.dir = cut.dir, comp.name = cur.name, geneList = enr.inputs$gsea.genevec, heatplot = dotplot.maxterms, dotplot = dotplot.maxterms, barplot = dotplot.maxterms)
             }
           }
         }
@@ -1382,13 +1429,13 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
         if (kegg.do[1]) {
           for (x in c('clusterProfiler::gseKEGG', 'clusterProfiler::gseMKEGG')) {
             my.gsea.res <- try(gsea_run(geneList = enr.inputs$gsea.genevec, species = species, func.name = x, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enrp.max, minGSSize = enr.min.genes))
-            if (!is(my.gsea.res, class2 = 'try-error')) gsea_output(gseaResult = my.gsea.res, out.dir = cut.dir, comp.name = cur.name)
+            if (!is(my.gsea.res, class2 = 'try-error')) gsea_output(gseaResult = my.gsea.res, out.dir = cut.dir, comp.name = cur.name, heatplot = dotplot.maxterms, dotplot = dotplot.maxterms, barplot = dotplot.maxterms, gsea.plot = dotplot.maxterms, ridgeplot = dotplot.maxterms)
           }
           ### ORA
           if(kegg.do[2]) {
             for (x in c('clusterProfiler::enrichKEGG', 'clusterProfiler::enrichMKEGG')) {
               my.ora.res <- try(ora_run(gene = enr.inputs$ora.genevec, species = species, func.name = x, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enrp.max, minGSSize = enr.min.genes))
-              if (!is(my.ora.res, class2 = 'try-error')) ora_output(enrichResult = my.ora.res, out.dir = cut.dir, comp.name = cur.name, geneList = enr.inputs$gsea.genevec)
+              if (!is(my.ora.res, class2 = 'try-error')) if (!is.null(my.ora.res)) ora_output(enrichResult = my.ora.res, out.dir = cut.dir, comp.name = cur.name, geneList = enr.inputs$gsea.genevec, heatplot = dotplot.maxterms, dotplot = dotplot.maxterms, barplot = dotplot.maxterms)
             }
           }
         }
@@ -1400,13 +1447,13 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
           ### GSEA
           func.name <- 'clusterProfiler::gseWP'
           my.gsea.res <- try(gsea_run(geneList = enr.inputs$gsea.genevec, organism = species, func.name = func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enrp.max, minGSSize = enr.min.genes))
-          if (!is(my.gsea.res, class2 = 'try-error')) gsea_output(gseaResult = my.gsea.res, out.dir = cut.dir, comp.name = cur.name)
+          if (!is(my.gsea.res, class2 = 'try-error')) gsea_output(gseaResult = my.gsea.res, out.dir = cut.dir, comp.name = cur.name, heatplot = dotplot.maxterms, dotplot = dotplot.maxterms, barplot = dotplot.maxterms, gsea.plot = dotplot.maxterms, ridgeplot = dotplot.maxterms)
         }
         ### ORA
         if(wp.do[2]) {
           func.name <- 'clusterProfiler::enrichWP'
           my.ora.res <- ora_run(gene = enr.inputs$ora.genevec, organism = species, func.name = func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enrp.max, minGSSize = enr.min.genes)
-          if (!is(my.ora.res, class2 = 'try-error')) ora_output(enrichResult = my.ora.res, out.dir = cut.dir, comp.name = cur.name, geneList = enr.inputs$gsea.genevec)
+          if (!is(my.ora.res, class2 = 'try-error')) if (!is.null(my.ora.res)) ora_output(enrichResult = my.ora.res, out.dir = cut.dir, comp.name = cur.name, geneList = enr.inputs$gsea.genevec, heatplot = dotplot.maxterms, dotplot = dotplot.maxterms, barplot = dotplot.maxterms)
         }
       }
       
@@ -1420,14 +1467,14 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
           func.name <- 'ReactomePA::gsePathway'
           my.gsea.res <- gsea_run(geneList = enr.inputs$gsea.genevec, organism = reactome.org, func.name = func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enrp.max, minGSSize = enr.min.genes)
           my.gsea.res@setType <- paste0(func.name, '_Reactome')
-          gsea_output(gseaResult = my.gsea.res, out.dir = cut.dir, comp.name = cur.name)
+          gsea_output(gseaResult = my.gsea.res, out.dir = cut.dir, comp.name = cur.name, heatplot = dotplot.maxterms, dotplot = dotplot.maxterms, barplot = dotplot.maxterms, gsea.plot = dotplot.maxterms, ridgeplot = dotplot.maxterms)
         }
         if(reactome.do[2]) {
           ### ORA
           func.name <- 'ReactomePA::enrichPathway'
           my.ora.res <- ora_run(gene = enr.inputs$ora.genevec, organism = reactome.org, func.name = func.name, t2g = NULL, t2g.name = NULL, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enrp.max, minGSSize = enr.min.genes)
           my.ora.res@ontology <- paste0(func.name, '_Reactome')
-          ora_output(enrichResult = my.ora.res, out.dir = cut.dir, comp.name = cur.name, geneList = enr.inputs$gsea.genevec)
+          if (!is(my.ora.res, class2 = 'try-error')) if (!is.null(my.ora.res)) ora_output(enrichResult = my.ora.res, out.dir = cut.dir, comp.name = cur.name, geneList = enr.inputs$gsea.genevec, heatplot = dotplot.maxterms, dotplot = dotplot.maxterms, barplot = dotplot.maxterms)
         }
       }
       
@@ -1475,7 +1522,7 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
                 if(!is(my.ora.res, class2 = 'try-error')) {
                   ## Little hack specific to MeSH results (as I was not able to get the value of extra parameters 'database' and 'category' from within the 'gsea_run()' function)
                   my.ora.res@ontology <- paste(c(mesh.func.name, y, x), collapse = '_')
-                  ora_output(enrichResult = my.ora.res, out.dir = cut.dir, comp.name = cur.name, geneList = enr.inputs$gsea.genevec)
+                  if (!is(my.ora.res, class2 = 'try-error')) if (!is.null(my.ora.res)) ora_output(enrichResult = my.ora.res, out.dir = cut.dir, comp.name = cur.name, geneList = enr.inputs$gsea.genevec, heatplot = dotplot.maxterms, dotplot = dotplot.maxterms, barplot = dotplot.maxterms)
                 }
               } else message(paste0("Unsupported MeSH database '", y, "'. Expecting one of : '", paste(mesh.dbs, collapse = "', '"), "'."))
             }
@@ -1494,7 +1541,7 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
                 if (!is(my.gsea.res, class2 = 'try-error')) {
                   ## Little hack specific to MeSH results (as I was not able to get the value of extra parameters 'database' and 'category' from within the 'gsea_run()' function)
                   my.gsea.res@setType <- paste(c(mesh.func.name, y, x), collapse = '_')
-                  gsea_output(gseaResult = my.gsea.res, out.dir = cut.dir, comp.name = cur.name)
+                  gsea_output(gseaResult = my.gsea.res, out.dir = cut.dir, comp.name = cur.name, heatplot = dotplot.maxterms, dotplot = dotplot.maxterms, barplot = dotplot.maxterms, gsea.plot = dotplot.maxterms, ridgeplot = dotplot.maxterms)
                 }
               } else message(paste0("Unsupported MeSH database '", y, "'. Expecting one of : '", paste(mesh.dbs, collapse = "', '"), "'."))
             }
@@ -1508,13 +1555,13 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
               ### GSEA
               func.name <- 'clusterProfiler::GSEA'
               my.gsea.res <- gsea_run(geneList = enr.inputs$gsea.genevec, species = species, func.name = func.name, t2g = custom_gmt_list[[cdb]], t2g.name = cdb, gene2Symbol = enr.inputs$gene2Symbol, seed = my.seed, pvalueCutoff = enrp.max, minGSSize = enr.min.genes)
-              gsea_output(gseaResult = my.gsea.res, out.dir = cut.dir, comp.name = cur.name)
+              gsea_output(gseaResult = my.gsea.res, out.dir = cut.dir, comp.name = cur.name, heatplot = dotplot.maxterms, dotplot = dotplot.maxterms, barplot = dotplot.maxterms, gsea.plot = dotplot.maxterms, ridgeplot = dotplot.maxterms)
             }
             if(custom.do[2]) {
               ### ORA
               func.name <- 'clusterProfiler::enricher'
               my.ora.res <- ora_run(gene = enr.inputs$ora.genevec, species = species, func.name = func.name, t2g = custom_gmt_list[[cdb]], t2g.name = cdb, gene2Symbol = enr.inputs$gene2Symbol, pvalueCutoff = enrp.max, minGSSize = enr.min.genes)
-              ora_output(enrichResult = my.ora.res, out.dir = cut.dir, comp.name = cur.name, geneList = enr.inputs$gsea.genevec)
+              if (!is(my.ora.res, class2 = 'try-error')) if (!is.null(my.ora.res)) ora_output(enrichResult = my.ora.res, out.dir = cut.dir, comp.name = cur.name, geneList = enr.inputs$gsea.genevec, heatplot = dotplot.maxterms, dotplot = dotplot.maxterms, barplot = dotplot.maxterms)
             }
           }
         }
@@ -1873,11 +1920,13 @@ gsea_run <- function(geneList = NULL, func.name = 'clusterProfiler::GSEA', speci
   }
   
   ## Adding some useful metadata
-  gsea.res@organism <- species
-  gsea.res@setType <- func.name
-  if(!is.null(gene2Symbol)) {
-    gsea.res@gene2Symbol <- gene2Symbol
-    gsea.res@keytype <- 'ENTREZID'
+  if(!is.null(gsea.res)) {
+    gsea.res@organism <- species
+    gsea.res@setType <- func.name
+    if(!is.null(gene2Symbol)) {
+      gsea.res@gene2Symbol <- gene2Symbol
+      gsea.res@keytype <- 'ENTREZID'
+    }
   }
   
   if (!verbose) options(warn=1)
@@ -2058,35 +2107,35 @@ ora_run <- function(gene = NULL, func.name = 'clusterProfiler::enricher', specie
     if (is.null(t2g)) stop("When calling this function with func.name = 'clusterProfiler::enricher', a value is required for 't2g'")
     if (is.null(t2g.name)) stop("When calling this function with func.name = 'clusterProfiler::enricher', a value is required for 't2g.name'")
     ## Functions requiring a TERM2GENE (msigdbr, CellMarkers, ...)
-    # ora.res <- or.function(gene = gene, TERM2GENE = t2g, pvalueCutoff = pvalueCutoff, minGSSize = minGSSize, universe = AnnotationDbi::mappedkeys(eval(parse(text = paste0(msigdbr2org(species), 'ACCNUM')))), ...)
     ora.res <- or.function(gene = gene, TERM2GENE = t2g, pvalueCutoff = pvalueCutoff, minGSSize = minGSSize, ...)
     func.name <- paste(c(func.name, t2g.name), collapse = '_')
   } else if (func.name == 'meshes::enrichMeSH') {
     ## MeSH (requires additional 'MeSHDb', 'database' and 'category' parameters)
     mesh.sp <- paste0(c('MeSH.', substr(unlist(strsplit(species, ' ')), c(1, 1), c(1,2)), '.eg.db'), collapse = '')
-    # ora.res <- try(or.function(gene = gene, MeSHDb = mesh.sp, pvalueCutoff = pvalueCutoff, minGSSize = minGSSize, universe = AnnotationDbi::mappedkeys(eval(parse(text = paste0(msigdbr2org(species), 'ACCNUM')))), ...), silent = TRUE)
     ora.res <- try(or.function(gene = gene, MeSHDb = mesh.sp, pvalueCutoff = pvalueCutoff, minGSSize = minGSSize, ...), silent = TRUE)
     if (is(ora.res, class2 = 'try-error')) return(ora.res)
   } else {
     if ('kegg' %in% tolower(func.name)) {
       ## KEGG / KEGGM (requires a custom species name in 'organism' parameter)
       kegg.sp <- tolower(paste0(substr(unlist(strsplit(species, ' ')), c(1, 1), c(1,2)), collapse = ''))
-      # ora.res <- or.function(gene = gene, organism = kegg.sp, pvalueCutoff = pvalueCutoff, minGSSize = minGSSize, universe = AnnotationDbi::mappedkeys(eval(parse(text = paste0(msigdbr2org(species), 'ACCNUM')))), ...)
       ora.res <- or.function(gene = gene, organism = kegg.sp, pvalueCutoff = pvalueCutoff, minGSSize = minGSSize, ...)
     } else if (species != 'Homo sapiens') stop(paste0("Function '", func.name, "' can only be used with the 'Homo sapiens' species.")) else {
       ## OTHER (generic functions without TERM2GENE or custom parameters, like those in DOSE package)
-      # ora.res <- or.function(gene = gene, pvalueCutoff = pvalueCutoff, minGSSize = minGSSize, universe = AnnotationDbi::mappedkeys(eval(parse(text = paste0(msigdbr2org(species), 'ACCNUM')))), ...)
       ora.res <- or.function(gene = gene, pvalueCutoff = pvalueCutoff, minGSSize = minGSSize, ...)
     }
   }
   gc()
   
+  message("ORA.RES", is(ora.res))
+  
   ## Adding some useful metadata
-  ora.res@ontology <- func.name
-  ora.res@organism <- species
-  if(!is.null(gene2Symbol)) {
-    ora.res@gene2Symbol <- gene2Symbol
-    ora.res@keytype <- 'ENTREZID'
+  if(!is.null(ora.res)) {
+    ora.res@ontology <- func.name
+    ora.res@organism <- species
+    if(!is.null(gene2Symbol)) {
+      ora.res@gene2Symbol <- gene2Symbol
+      ora.res@keytype <- 'ENTREZID'
+    }
   }
   
   if (!verbose) options(warn=1)
