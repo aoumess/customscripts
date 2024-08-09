@@ -481,7 +481,8 @@ AQM_run <- function(mat = NULL, pheno_df = NULL, pheno_colnames = NULL, to_log =
   if(save_results) warning('AQM results will be saved as RDS, but may take some hard drive space...')
   
   ## Create temporary eset
-  temp_eset <- Biobase::ExpressionSet(assayData = mat, annotation = title, phenoData = new("AnnotatedDataFrame", data = pheno_df))
+  temp_eset <- if(!is.null(pheno_df)) Biobase::ExpressionSet(assayData = mat, annotation = title, phenoData = new("AnnotatedDataFrame", data = pheno_df)) else Biobase::ExpressionSet(assayData = mat, annotation = title)
+  if(is.null(pheno_colnames)) pheno_colnames <- character(0)
   rm(mat)
   ## Running AQM
   aqm_res <- arrayQualityMetrics::arrayQualityMetrics(
