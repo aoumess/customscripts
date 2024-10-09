@@ -1,3 +1,11 @@
+## NOTE (20241003)
+## =============== ##
+## Due to a grid bug in latest stable CRAN version (0.28), installation from github is recommended :
+## remotes::install_github("renozao/pkgmaker")
+## remotes::install_github("renozao/NMF", ref = "devel")
+
+## Other packages to test : aged, NNLM, RcppML (or via scatter::calculateNMF), dimRed
+
 ## NMF_run
 ##
 ## DESCRIPTION : A wrapper to ease the use of the NMF package for R. This allows
@@ -17,6 +25,12 @@
 ##
 ## VERSION NOTES:
 ##
+## v2.0 20241005
+## . Almost complete rewrite with updated code to fit most recent version of NMF
+## . Output structure (both data objects and data on disc) reformatted
+## . Added svg_png.R support for graphical ouptuts that can be edited.
+## . Removed the method evaluation part (not needed)
+##
 ## v1.1b 20160621
 ## . Added a parameter to modifiy the nmf.option("shared.memory") to inactivate shared
 ##   memory through big.matrix as it makes nmf crash on R3.3.0 under Ubuntu 14.04 with
@@ -34,34 +48,162 @@
 ## v1.0 20160302
 ## . First release
 
+source("/home/job/gits/customscripts/R/svg_png.R")
 
+## NMF methods list ====
 ## Just gives the names of built-in NMF methods in package NMF
 ## NOTA : "ls-nmf" and "pe-nmf" seem to fail with my typical datasets...
 nmf_methods <- function(echo = FALSE) {
-  require(NMF)
-  nmfm <- nmfAlgorithm()
+  nmfm <- NMF::nmfAlgorithm()
   if (echo) print(nmfm)
   return(nmfm)
 }
 
+## Run NMF ====
+nmf_run <- function(data = NULL, ranks = 2:3, method = "brunet", default_seed_method = "none", my_seed = 1337, nrun = 100, maxIter = 5000, shift.if.neg = TRUE, classes = NULL, shuffle = TRUE, shuffle.factor = .25, ncores = NULL, odir = getwd(), shared.memory = TRUE) {
+  if (!is.matrix(data)) stop("'data' must be a numeric matrix !")
+  if (!method %in% NMF::nmfAlgorithm()) stop("Given NMF algorithm is not supported ! See nmf_methods()")
+  if (!is.null(classes)) {
+    if (nrow(classes) != ncol(data)) stop("'classes' length and number of columns in 'data' do not match !")
+    for (x in colnames(classes)) classes[[x]] <- as.factor(classes[[x]])
+  }
+  if (length(ranks) < 2) stop('At least two rank values shoud be given !')
+  if (any(ranks < 2)) stop('Ranks should start at 2 at least')
+  if (!all(is.integer(ranks))) stop('All ranks should be integers !')
+  if (!is.null(ncores) & !is.numeric(ncores)) stop("'ncores' must be a positive numeric value !")
+  if (length(method) != 1) stop('A single NMF method name should be given !')
+  if (!dir.exists(odir)) stop("'odir' must be an existing and accessible directory !")
+  datmin <- min(data, na.rm = TRUE)
+  if (shift.if.neg & datmin < 0) data <- data - datmin
+  
+  ## Set options
+  if (!is.null(ncores)) NMF::nmf.options("cores" = ncores)
+  NMF::nmf.options("maxIter" = maxIter)
+  NMF::nmf.options("random.seed" = my_seed)
+  NMF::nmf.options("grid.patch" = TRUE) ## To avoid PDF blank page
+  NMF::nmf.options("shared.memory" = shared.memory)
+  
+  ## Create output dir
+  methodword <- sub(pattern = "/", replacement = "-", x = method)
+  oroot <- paste(c("NMF", paste0(nrow(data), ".", ncol(data)), methodword, paste0("r", paste(range(ranks), collapse = ".")), paste0("n", nrun), paste0("mI", maxIter)), collapse = '_')
+  odir <- paste0(odir, "/", oroot, "/")
+  dir.create(path = odir, recursive = TRUE)
+  
+  ## NMF
+  message("Running NMF ...")
+  library(NMF)
+  nmf.res <- NMF::nmf(x = data, rank = ranks, method = method, seed = my_seed, nrun = nrun)
+  
+  ## Add data
+  nmf.res$data <- data
+  ## Add samples membership
+  nmf.res$membership <- data.frame( Samples = colnames(nmf.res$fit[[1]]@fit@H), lapply(seq_along(nmf.res$measures$rank), function(r) { as.numeric(NMF::predict(nmf.res$fit[[r]])) }) , stringsAsFactors = FALSE)
+  colnames(nmf.res$membership) <- c('Sample', paste0('rank.', ranks))
+  ## Add feature scores
+  nmf.res$feature.score <- lapply(seq_along(nmf.res$fit), function(ra) { NMF::featureScore(object = nmf.res$fit[[ra]], method = 'kim') })
+  names(nmf.res$feature.score) <- ranks
+  ## Add selected features
+  nmf.res$feature.selected <- lapply(seq_along(nmf.res$fit), function(ra) { NMF::extractFeatures(object = nmf.res$fit[[ra]], method = 'kim') })
+  for (x in seq_along(ranks)) names(nmf.res$feature.selected[[x]]) <- seq.int(1:ranks[x])
+  ## Add options
+  nmf.res$options <- NMF::nmf.options()
+  
+  ## Save the NMF object
+  message("Saving results ...")
+  saveRDS(object = nmf.res, file = paste0(odir, '/', oroot, '.RDS'), compress = 'bzip2')
+  
+  ## Saving clustering metrics, membership
+  write.table(nmf.res$measures, paste0(odir, '/', oroot, '_measures.tsv'), sep="\t", quote = FALSE, row.names = FALSE)
+  WriteXLS::WriteXLS(x = nmf.res$measures, ExcelFileName = paste0(odir, '/', oroot, '_measures.xlsx'), SheetNames = 'NMF.measures', AdjWidth = TRUE, AutoFilter = TRUE, BoldHeaderRow = TRUE, na = NA, FreezeRow = 1, FreezeCol = 1)
+  write.table(x = nmf.res$membership, file = paste0(odir, '/', oroot, '_membership.tsv'), sep = "\t", quote = FALSE, row.names = FALSE)
+  WriteXLS::WriteXLS(x = nmf.res$membership, ExcelFileName = paste0(odir, '/', oroot, '_membership.xlsx'), SheetNames = 'NMF.membership', AdjWidth = TRUE, AutoFilter = TRUE, BoldHeaderRow = TRUE, na = NA, FreezeRow = 1, FreezeCol = 1)
+  
+  ## Consensus heatmap
+  message("Plotting consensus heatmap ...")
+  svg(filename = paste0(odir, '/', oroot, '_consensus.hmap.svg'), width = 40, height = 30)
+  if (is.null(classes)) NMF::consensusmap(object = nmf.res) else NMF::consensusmap(object = nmf.res, annCol = classes)
+  svg_off()
+  
+  ## Rank plots
+  ### Rank metrics
+  message("Plotting ranks measures ...")
+  svg(filename = paste0(odir, '/', oroot, '_ranks.survey.svg'), width = 15, height = 10)
+  rsplot <- plot(nmf.res, what = c("all", "cophenetic", "rss", "residuals", "dispersion", "evar", "sparseness", "sparseness.basis", "sparseness.coef", "silhouette", "silhouette.coef", "silhouette.basis", "silhouette.consensus"))
+  plot(rsplot)
+  svg_off()
+  
+  ## Per rank
+  message("Generating rank_level output ...")
+  for (ar in seq_along(ranks)) {
+    crank <- ranks[ar]
+    rank_dir <- paste0(odir, '/rank.', crank)
+    dir.create(path = rank_dir, recursive = TRUE)
+    ## Consensus heatmap
+    svg(filename = paste0(rank_dir, '/rank.', crank, '_consensus.hmap.svg'), width = 22, height = 20)
+    if (is.null(classes)) NMF::consensusmap(object = nmf.res$fit[[ar]]) else NMF::consensusmap(object = nmf.res$fit[[ar]], annCol = classes)
+    svg_off()
+    ## Mixture heatmap
+    svg(filename = paste0(rank_dir, '/rank.', crank, '_mixt.coeff.hmap.svg'), width = 15, height = 10)
+    if (is.null(classes)) NMF::coefmap(nmf.res$fit[[ar]], main = paste0('Mixture coefficients\n(rank ', crank, ')')) else NMF::coefmap(nmf.res$fit[[ar]], main = paste0('Mixture coefficients\n(rank ', crank, ')'), annCol = classes)
+    svg_off()
+    ## Basis map
+    my_dist <- 'pearson'
+    my_clust <- 'ward.D'
+    svg(filename = paste0(rank_dir, '/rank.', crank, '_mixt.basis.hmap_', my_dist, '.', my_clust, '_all.svg'), width = 15, height = 22)
+    NMF::basismap(nmf.res$fit[[ar]], subsetRow = FALSE, distfun = my_dist, hclustfun = my_clust, treeheight = 0, annRow = list(Metagene=':basis'), main = paste0('Basis components for ALL features\n(rank ', crank, ')'))
+    svg_off()
+    svg(filename = paste0(rank_dir, '/rank.', crank, '_mixt.basis.hmap_', my_dist, '.', my_clust, '_selected.svg'), width = 10, height = 15)
+    NMF::basismap(nmf.res$fit[[ar]], subsetRow = TRUE, distfun = my_dist, hclustfun = my_clust, treeheight = 0, annRow = list(Metagene=':basis'), main = paste0('Basis components for SELECTED features\n(rank ', crank, ')'))
+    svg_off()
+    ## Save selected features
+    bf_df <- data.frame(Feature = unname(unlist(nmf.res$feature.selected[[ar]])), Cluster = rep.int(x = 1:crank, times = sapply(nmf.res$feature.selected[[ar]], length)))
+    bf_df <- bf_df[!is.na(bf_df$Feature),]
+    bf_df$Feature <- rownames(nmf.res$data)[bf_df$Feature]
+    WriteXLS::WriteXLS(x = bf_df, ExcelFileName = paste0(rank_dir, '/rank.', crank, '_selected.features.xlsx'), AdjWidth = TRUE, BoldHeaderRow = TRUE)
+    ## Save membership
+    memb_df <- nmf.res$membership[,c(1,ar)]
+    WriteXLS::WriteXLS(x = memb_df, ExcelFileName = paste0(rank_dir, '/rank.', crank, '_samples.membership.xlsx'), AdjWidth = TRUE, BoldHeaderRow = TRUE)
+  }
+  
+  ## Do shuffling ?
+  if (shuffle) {
+    ## NMF shuffled
+    message("Re-running with shuffled data ...")
+    set.seed(my_seed)
+    data.rand <- NMF::randomize(data)
+    nmf.res.rand <- NMF::nmf(x = data.rand, rank = ranks, method = method, seed = my_seed, nrun = round(nrun * shuffle.factor))
+    
+    ## Save results
+    message("Saving shuffled results ...")
+    saveRDS(object = nmf.res.rand, file = paste0(odir, '/', oroot, '_SHUFFLED.RDS'), compress = 'bzip2')
+    
+    ## Ranks plot
+    message("Plotting shuffled results ...")
+    svg(paste0(odir, '/', oroot, '_ranks.survey_SHUFFLED.svg'), width = 15, height = 10)
+    rscplot <- plot(nmf.res, nmf.res.rand)
+    plot(rscplot)
+    svg_off()
+  }
+}
+
+
+## HELP ====
 ## Help for main function
 help.nmf_run <- function() {
   cat("
-nmf_run <- function(data = NULL, rank = 2:3, method = \"brunet\", default.seed = \"none\", seed = 123456, nrun = 100, maxIter = 5000, shift.if.neg = TRUE, methods.compare = TRUE, methods.list = NULL, track = TRUE, classes = NULL, shuffle = TRUE, ncores = NULL, odir = NULL, shared.memory = TRUE)
+nmf_run <- function(data = NULL, ranks = 2:3, method = \"brunet\", default_seed_method = \"none\", seed = 123456, nrun = 100, maxIter = 5000, shift.if.neg = TRUE, classes = NULL, shuffle = TRUE, ncores = NULL, odir = NULL, shared.memory = TRUE)
 
 data            :  (matrix)             A features (rows) by samples (cols) matrix of numerical values.
-rank            :  (integer)            A vector of integers corresponding to desired clusters.
-method          :  (character)          The NMF method to use. Run nmf.methods.list() to obtain a list of available methods.
-default.seed    :  (character)          The default seed method.
+ranks            :  (integer)            A vector of integers corresponding to desired clusters.
+method          :  (character)          The NMF method to use. Run nmf_methods() to obtain a list of available methods.
+default_seed_method    :  (character)          The default seed method.
 seed            :  (numeric)            The random seed.
 nrun            :  (integer)            Nomber of runs to proceed to compute a consensus.
 maxIter         :  (integer)            Number of maximum iterations for convergence.
 shift.if.neg    :  (logical)            Perform a shift of the matrix if negative values are found.
-methods.compare :  (logical)            Perform a quick comparison of NMF methods efficiency using 10 runs for each.
-methods.list    :  (character)          Character vector giving the methods to compare if methods.compare is set to true (by defaut, all 6 compatible methods).
-track           :  (logical)            Store and plot tracks of residuals.
 classes         :  (character/factor)   Known classes for the assessed samples, to compare with identified clusters.
 shuffle         :  (logical)            Rerun NMF with shuffled data to compare robustness against a null distribution of your data.
+suffle.factor   :  (0<numeric<=1)       The proportion of nrun to use for shuffling (only used when shuffle is TRUE)
 ncores          :  (integer)            Number of threads to use (by default, all available minus one).
 odir            :  (character)          The directory where results will be put.
 shared.memory   :  (logical)            Activate shared memory (using big.matrix). Set it to FALSE in case of crash related to this issue.
@@ -69,152 +211,11 @@ shared.memory   :  (logical)            Activate shared memory (using big.matrix
 ")
 }
 
-## Main function
-nmf_run <- function(data = NULL, rank = 2:3, method = "brunet", default.seed = "none", seed = 123456, nrun = 100, maxIter = 5000, shift.if.neg = TRUE, methods.compare = FALSE, methods.list = NULL, track = TRUE, classes = NULL, shuffle = TRUE, ncores = NULL, odir = getwd(), shared.memory = TRUE) {
-  # data = mymat
-  # rank = 2:3
-  # method = "brunet"
-  # default.seed = "none"
-  # seed = 123456
-  # nrun = 10
-  # maxIter = 5000
-  # shift.if.neg = TRUE
-  # methods.compare = FALSE
-  # methods.list = NULL
-  # track = TRUE
-  # classes = NULL
-  # shuffle = FALSE
-  # ncores = 1
-  # odir = getwd()
-  # shared.memory = TRUE
-  
-  require(NMF)
-  if (is.null(methods.list)) methods.list <- nmf.methods.list()
-  if (!is.matrix(data)) stop("'data' must be a numeric matrix !")
-  if (!method %in% nmfAlgorithm()) stop("Given NMF algorithm is not supported ! See nmf.methods.list()")
-  if (!is.null(classes)) {
-    if (length(classes) != ncol(data)) stop("'classes' length and number of columns in 'data' do not match !")
-    classes <- as.character(classes)
-  }
-  if (!is.null(ncores) & !is.numeric(ncores)) stop("'ncores' must be a positive numeric value !")
-  if (!dir.exists(odir)) stop("'odir' must be an existing and accessible directory !")
-  datmin <- min(data, na.rm = TRUE)
-  if (shift.if.neg & datmin < 0) data <- data - datmin
-  if (length(unique(rank)) < 2) stop("At least two differentranks are required !")
-  if (!is.null(ncores)) nmf.options("cores" = ncores)
-  # if (track) nmf.options("track" = track)
-  nmf.options("maxIter" = maxIter)
-  nmf.options("random.seed" = default.seed)
-  nmf.options("grid.patch" = TRUE)
-  nmf.options("shared.memory" = shared.memory)
-  
-  methodword <- sub(pattern = "/", replacement = "-", x = method)
-  print("Running NMF ...")
-  nmf.res <- NMF::nmf(x = data, rank = rank, method = method, seed = seed, nrun = nrun)
-  
-  print("Saving results ...")
-  oroot <- paste0("NMF_", nrow(data), ".", ncol(data), "_", methodword, "_r", paste(range(rank), collapse = "."), "_n", nrun, "_mI", maxIter)
-  odir <- paste0(odir, "/", oroot, "/")
-  dir.create(odir)
-  oroot <- paste0(odir, oroot)
-  # oroot <- paste0(odir, "/NMF_", nrow(data), ".", ncol(data), "_", method, "_r", paste(range(rank), collapse = "."), "_n", nrun)
-  
-  if (length(rank) > 1) {
-    require(foreach)
-    mg.scores <- foreach(ra = 1:length(nmf.res$fit)) %do% {
-      return(featureScore(nmf.res$fit[[ra]]))
-    }
-    names(mg.scores) <- names(nmf.res$fit)
-    mg.class <- foreach(ra = 1:length(nmf.res$fit)) %do% {
-      extf <- extractFeatures(nmf.res$fit[[ra]])
-      names(extf) <- seq_along(extf)
-      return(extf)
-    }
-    names(mg.class) <- names(nmf.res$fit)
-  } else {
-    mg.scores <- featureScore(nmf.res)
-    mg.class <- extractFeatures(nmf.res)
-  }
-  nmfobj <- list(data = data, nmf.options = nmf.options(), nmf.res = nmf.res, nmf.features.score = mg.scores, nmf.features.metagene.class = mg.class)
-  saveRDS(object = nmfobj, file = paste0(oroot, ".RDS"))
-  
-  if (length(rank) > 1) write.table(nmf.res$measures, paste0(oroot, "_measures.txt"), sep="\t", quote = FALSE, row.names = FALSE)
-  
-  require(foreach)
-  nmf.membership <- data.frame(Samples = colnames(nmf.res$fit[[1]]@fit@H), foreach (r = 1:length(nmf.res$measures$rank), .combine = "cbind") %do% {
-    as.numeric(predict(nmf.res$fit[[r]]))
-  }, stringsAsFactors = FALSE)
-  colnames(nmf.membership) <- c("Sample", paste0("rank.", nmf.res$measures$rank))
-  write.table(nmf.membership, file = paste0(oroot, "_membership.txt"), sep = "\t", quote = FALSE, row.names = FALSE)
-  
-  print("Plotting consensus heatmap ...")
-  pdf(paste0(oroot, "_consensus.hmap.pdf"), width = 29.7/cm(1), height = 21/cm(1))
-  if (is.null(classes)) NMF::consensusmap(nmf.res) else consensusmap(nmf.res, annCol = classes)
-  dev.off()
-  
-  if(length(rank) > 1) {
-    
-    print("Plotting ranks measures ...")
-    pdf(paste0(oroot, "_ranks.survey.pdf"), width = 29.7/cm(1), height = 21/cm(1))
-    rsplot <- plot(nmf.res, what = c("all", "cophenetic", "rss", "residuals", "dispersion", "evar", "sparseness", "sparseness.basis", "sparseness.coef", "silhouette", "silhouette.coef", "silhouette.basis", "silhouette.consensus"))
-    plot(rsplot)
-    dev.off()
-    
-    pdf(paste0(oroot, "_mixt.coeff.hmap.pdf"), width = 29.7/cm(1), height = 21/cm(1))
-    for (my.r in 1:length(nmf.res$fit)) coefmap(nmf.res$fit[[my.r]], main = paste0("Mixture coefficients (r=", names(nmf.res$fit)[my.r], ")"))
-    dev.off()
-    
-    if (shuffle) {
-      print("Re-running with shuffled data ...")
-      data.rand <- randomize(data)
-      nmf.res.rand <- nmf(x = data.rand, rank = rank, method = method, seed = seed, nrun = nrun)
-      
-      print("Saving shuffled results ...")
-      saveRDS(object = nmf.res.rand, file = paste0(oroot, "_SHUFFLED.RDS"))
-      
-      print("Plotting shuffled results ...")
-      pdf(paste0(oroot, "_ranks.survey_SHUFFLED.pdf"), width = 29.7/cm(1), height = 21/cm(1))
-      rscplot <- plot(nmf.res, nmf.res.rand)
-      plot(rscplot)
-      dev.off()
-    }
-  }
-  
-  if (methods.compare) {
-    ## Limiting methods to those that are robust
-    comp.methods.list <- methods.list[methods.list %in% c("brunet", "KL", "lee", "Frobenius", "offset", "nsNMF")]
-    if (length(comp.methods.list) <2) print("Can't perform comparison with less than two methods !")
-    else {
-      print("Performing methods comparison ...")
-      if (track) pdf(paste0(oroot, "_track.pdf"), width = 29.7/cm(1), height = 21/cm(1))
-      for (my.r in rank) {
-        print(paste0(" ... for rank ", my.r, "."))
-        my.nrun <- ifelse(nrun < 10, nrun, 10)
-        nmf.res.comp <- nmf(x = data, rank = my.r, method = as.list(comp.methods.list), seed = seed, nrun = my.nrun, .options = "t")
-        nmf.res.comp.df <- compare(nmf.res.comp)
-        write.table(nmf.res.comp.df, paste0(odir, "/NMF_", nrow(data), ".", ncol(data), "_methods.compare_r", my.r, "_m", length(comp.methods.list), "_n", my.nrun, ".txt"), sep="\t", row.names = FALSE, quote = FALSE)
-        if (track) {
-          plot(nmf.res.comp, main = paste0("NMF Residuals (r=", my.r, ")"))
-        }
-      }
-      if (track) dev.off()
-    }
-  } else if (track) {
-    print("Computing track ...")
-    pdf(paste0(oroot, "_track.pdf"), width = 29.7/cm(1), height = 21/cm(1))
-    for (my.r in rank) {
-      nmf.res.t <- nmf(x = data, rank = my.r, method = method, seed = seed, nrun = 1, .options = "t")
-      plot(nmf.res.t, main = paste0("NMF Residuals (r=", my.r, ")"))
-    }
-    dev.off()
-  }
-}
-
 
 
 
 #######
-## DEMO FROM THE NMF VIGNETTE
+## DEMO FROM THE NMF VIGNETTE (old) ====
 
 # data("esGolub")
 # 
