@@ -84,7 +84,7 @@ skmeans_run <- function(data = NULL, k.test = 2:5, method = 'standard', control 
   dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
   
   ## Output rootname
-  or <- paste0(outdir, '/', paste(c('skmeans', methodword, paste(c('k', range(k.test, na.rm = TRUE)), collapse = '.'), paste0('mI.', maxIter)), collapse = '_'))
+  or <- paste0(outdir, '/', paste(c('skmeans', methodword, paste(c('k', range(k.test, na.rm = TRUE)), collapse = '.')), collapse = '_'))
   
   ## Save result object
   saveRDS(skmeans.res, paste0(or, '_results.RDS'))
@@ -110,14 +110,14 @@ skmeans_run <- function(data = NULL, k.test = 2:5, method = 'standard', control 
   svg_off()
   ## Save silhouettes data
   kout_df <- data.frame(k = k.test, silhouette = silh.mean, stringsAsFactors = FALSE)
-  write.table(x = kout_df, file = paste0(outdir, "/skmeans_k", min(k.test), ".k", max(k.test), "_method.", methodword, "_maxIter.", maxIter, "_silhouettes.txt"), sep="\t", quote = FALSE, row.names = FALSE)
-  WriteXLS::WriteXLS(x = kout_df, ExcelFileName = paste0(outdir, "/skmeans_k", min(k.test), ".k", max(k.test), "_method.", methodword, "_maxIter.", maxIter, "_silhouettes.xlsx"), SheetNames = paste(c('Sk', method, 'sil'), collapse = '_'), AdjWidth = TRUE, AutoFilter = TRUE, BoldHeaderRow = TRUE, na = NA, FreezeRow = 1, FreezeCol = 1)
+  write.table(x = kout_df, file = paste0(or, '_silhouettes.txt'), sep = "\t", quote = FALSE, row.names = FALSE)
+  WriteXLS::WriteXLS(x = kout_df, ExcelFileName = paste0(or, '_silhouettes.xlsx'), SheetNames = paste(c('Sk', method, 'sil'), collapse = '_'), AdjWidth = TRUE, AutoFilter = TRUE, BoldHeaderRow = TRUE, na = NA, FreezeRow = 1, FreezeCol = 1)
   crit.values <- vapply(1:length(k.test), function(k) { return(skmeans.res[[k]]$value) }, .1)
   best.idx <- which.max(crit.values)
   bestK <- k.test[best.idx]
   
   ## Ploting criterion values
-  svg(filename = paste0(outdir, '/skmeans_k', min(k.test), '.k', max(k.test), '_method.', methodword, '_maxIter.', maxIter, '_best.', bestK, '.svg'), width = 1024/96, height = 1024/96)
+  svg(filename = paste0(or, '_best.', bestK, '.svg'), width = 1024/96, height = 1024/96)
   plot(k.test, crit.values, type = "b", pch = 20, xlab = "K", ylab = "Criterion", main = paste0("skmeans criterion (to maximize)\nmethod = ", methodword))
   points(bestK, crit.values[best.idx], pch = 18, cex = 2, col = 2)
   segments(bestK, 0, bestK, crit.values[best.idx], lty = 2, col = 2)
@@ -125,9 +125,13 @@ skmeans_run <- function(data = NULL, k.test = 2:5, method = 'standard', control 
   svg_off()
   
   ## Membership
-  skmeans.membership <- data.frame(Sample = colnames(data), foreach(k = k.test, .combine = "cbind") %do% skmeans.res[[as.character(k)]]$cluster, stringsAsFactors = FALSE)
+  # skmeans.membership <- data.frame(Sample = colnames(data), foreach(k = k.test, .combine = "cbind") %do% skmeans.res[[as.character(k)]]$cluster, stringsAsFactors = FALSE)
+  
+  skmeans.membership <- cbind(data.frame(Sample = colnames(data)), as.data.frame(lapply(k.test, function(k) { skmeans.res[[as.character(k)]]$cluster })))
+  
+  
   colnames(skmeans.membership) <- c("Sample", k.test)
-  memb_root <- paste0(outdir, "/skmeans_k", min(k.test), ".k", max(k.test), "_method.", methodword, "_maxIter.", maxIter, "_membership")
+  memb_root <- paste0(or, '_membership')
   memb_root_best <- paste0(memb_root, "_best.", bestK)
   memb_root_all <- paste0(memb_root, "_AllK")
   saveRDS(object = skmeans.membership[, c(1, which(colnames(skmeans.membership) == bestK))], file = paste0(memb_root_best, '.RDS'))
@@ -139,20 +143,16 @@ skmeans_run <- function(data = NULL, k.test = 2:5, method = 'standard', control 
   
   ## AVG plot
   bestk.class <- skmeans.membership[,which(colnames(skmeans.membership) == bestK)]
-  medsampz <- foreach(k = unique(bestk.class), .combine = "cbind") %do% { return(vapply(1:nrow(data), function(x) { return(median(data[x,bestk.class == k])) }, .1)) }
-  # png(paste0(outdir, "/skmeans_k", min(k.test), ".k", max(k.test), "_method.", methodword, "_maxIter.", maxIter, "_best.", bestK, "_mediansamples.png"), width=1650, 1024)
+  # medsampz <- foreach(k = unique(bestk.class), .combine = "cbind") %do% { return(vapply(1:nrow(data), function(x) { return(median(data[x,bestk.class == k])) }, .1)) }
+  
+  medsampz <- as.data.frame(lapply(unique(bestk.class), function(k) { vapply(1:nrow(data), function(x) { return(median(data[x,bestk.class == k])) }, .1) }))
+  
+  
   svg(paste0(memb_root_best, '_mediansamples.svg'), width = 1850/96, height = 1024/96)
   plot(0,0, type = "n", xlim = c(1, nrow(medsampz)), ylim = range(medsampz), xaxs = "i", xlab = "Value index", ylab = "Value", main = paste0("SKmeans (", method, ") median samples for best K (", bestK, ").\nPopulations = ", paste0(as.vector(table(bestk.class)), collapse = ", ")))
   for (k in 1:ncol(medsampz)) lines(medsampz[,k], col = k, lwd = 2)
   # dev.off()
   svg_off()
-  
-  # msrange <- vapply(1:nrow(medsampz), function(x) {diff(range(medsampz[x,]))}, .1)
-  # png(paste0(outdir, "/skmeans_k", min(k.test), ".k", max(k.test), "_method.", methodword, "_maxIter.", maxIter, "_best.", bestK, "_mediansamples_sorted.png"), width=1650, 1024)
-  # plot(0,0, type = "n", xlim = c(1,nrow(medsampz)), ylim = range(medsampz), xaxs = "i", xlab = "Value index", ylab = "Value", main = paste0("SKmeans (", method, ") median samples for best K (", bestK, ").\nPopulations = ", paste0(as.vector(table(bestk.class)), collapse = ", ")))
-  # plot(0,0, type = "n", xlim = c(1,100), ylim = range(medsampz), xaxs = "i", xlab = "Value index", ylab = "Value", main = paste0("SKmeans (", method, ") median samples for best K (", bestK, ").\nPopulations = ", paste0(as.vector(table(bestk.class)), collapse = ", ")))
-  # for (k in 1:ncol(medsampz)) lines(medsampz[order(msrange, decreasing = TRUE),k], col = k)
-  # dev.off()
 }
 
 ## CONTROL examples

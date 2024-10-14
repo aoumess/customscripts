@@ -2,7 +2,7 @@
 #### HEADER ####
 #..............#
 
-##  This is a collection of fuctions to perform various RNA expression analyses
+##  This is a collection of functions to perform various RNA expression analyses
 ##  . Differential expression
 ##    . DEA testing for simple and complex designs [DESeq2]
 ##    . QC plots (M-A, p-value distribution, sample boxplot, PCA, ...)
@@ -17,7 +17,7 @@
 ##  Tested on R v4.3.2
 ##  PACKAGES :
 ##  . REQUIRED :
-##    . CRAN : 'tidyverse' [1.3.0], 'ggnewscale' [0.4.5], 'vroom' [1.4.0]
+##    . CRAN : 'tidyverse' [1.3.0], 'ggnewscale' [0.4.5], 'vroom' [1.4.0], rsvg
 ##    . Bioconductor : 'clusterProfiler' [3.18.1] (will import other required packages as dependencies, like 'DOSE' and 'enrichplot'), 'org.Xx.eg.db' (species-specific, like 'org.Hs.eg.db' [3.12.0])
 ##  . SUGGESTED :
 ##    . Bioconductor : 'msigdbr' [7.2.1] (to assess MSigDB databases), 'meshes' [1.16.0] (to assess MeSH databases), 'MeSH.Xxx.eg.db' (species-specific, like 'MeSH.Hsa.eg.db' [1.15.0], required to query MeSH databases), 'pathview' [1.30.1] (to plot KEGG pathways if 'clusterProfiler::enrichKEGG' or 'clusterProfiler::gseKEGG' functions are used)
@@ -28,7 +28,7 @@
 #...................#
 
 ## Handling needed packages
-cran_list <- c('BiocManager', 'stringr', 'BiocParallel', 'matrixStats', 'circlize', 'BiocParallel', 'ggplot2', 'amap', 'knitr', 'readxl', 'writexl', 'randomcoloR', 'data.table', 'RColorBrewer', 'EnvStats', 'openxlsx', 'purrr', 'coop')
+cran_list <- c('BiocManager', 'stringr', 'BiocParallel', 'matrixStats', 'circlize', 'BiocParallel', 'ggplot2', 'amap', 'knitr', 'readxl', 'writexl', 'randomcoloR', 'data.table', 'RColorBrewer', 'EnvStats', 'openxlsx', 'purrr', 'coop', 'rsvg')
 for (pkgn in sort(unique(cran_list))) if(! pkgn %in% installed.packages()) install.packages(pkgn)
 
 bioc_list <- c('DESeq2', 'ComplexHeatmap', 'IHW', 'limma', 'msigdbr', 'clusterProfiler', 'ReactomePA', 'meshes', 'GSVA', 'ReactomePA', 'meshes', 'pathview')
@@ -37,7 +37,12 @@ for (pkgn in sort(unique(bioc_list))) if(! pkgn %in% installed.packages()) insta
 gith_list <- list('omnideconv' = 'omnideconv/immunedeconv')
 for (pkgn in sort(unique(names(gith_list)))) if(! pkgn %in% installed.packages()) remotes::install_github(gith_list[[pkgn]])
 
+#.................#
+# SOURCES ####
+#.................#
 
+## Functions to write plots to SVG that automatically generates a PNG too.
+source('https://github.com/aoumess/customscripts/raw/refs/heads/main/R/svg_png.R')
 
 #.................#
 # FUNCTIONS ####
@@ -688,66 +693,54 @@ full_design_generator <- function(init_df = NULL, samples_colname = NULL, covar_
 
 
 ## Regress a matrix with covariates
-matrix_covar_regress <- function(mat = NULL, covar_factor_df = NULL, covar = NULL, conti.colnames = NULL) {
+matrix_covar_regress <- function(mat = NULL, covar_factor_df = NULL, covar_conti_df = NULL) {
   ## Checks
-  if (is)
-  #### Running limma::removeBatchEffect the good way
-  limma.bc.batch2 <- limma.bc.batch1 <- limma.bc.covar <- NULL
-  ##### Handling factor covariates
-  for (fc in factor.colnames) {
-    message(paste0('ASSESS COVAR FACTOR COVAR : ', fc))
-    if (is.null(limma.bc.batch1)) {
-      limma.bc.batch1 <- DE2obj@colData[[fc]]
-    } else if (is.null(limma.bc.batch2)) {
-      limma.bc.batch2 <- DE2obj@colData[[fc]]
-    } else message(paste0('Factor [', fc, '] will not be considered for matrix regression by limma::removeBatchEffect as ony 2 factors can be used.'))
+  if (is.null(mat)) stop('A matrix is required !')
+  if (all(is.null(c(covar_factor_df, covar_conti_df)))) stop('covar_factor_df and covar_conti_df should not be simultaneously NULL !')
+  if (!is.matrix(mat)) stop('mat should be a matrix !')
+  if (!is.numeric(as.vector(mat))) stop('mat should be a numeric matrix !')
+  if (!is.null(covar_factor_df)) {
+    if (!is.data.frame(covar_factor_df)) stop('covar_factor_df should be a data.frame !')
+    if(ncol(covar_factor_df) > 2) warning('More than 2 factors found in covar_factor_df : only the first 2 will be used (ComBat limitation) !')
   }
-  ##### Handling continuous covariates
-  for (cc in conti.colnames) {
-    message(paste0('ASSESS COVAR CONTI COVAR : ', cc))
-    if (is.null(limma.bc.covar)) limma.bc.covar <- as.matrix(DE2obj@colData[, cc, drop = FALSE]) else limma.bc.covar <- cbind(limma.bc.covar, as.matrix(DE2obj@colData[, cc, drop = FALSE]))
+  if (!is.null(covar_conti_df) & !is.data.frame(covar_conti_df)) stop('covar_conti_df should be a data.frame !')
+  if (!all(vapply(covar_factor_df, is.factor, TRUE))) stop('All columns in covar_factor_df should be factors !')
+  if (!all(vapply(covar_conti_df, is.numeric, TRUE))) stop('All columns in covar_conti_df should be numerics !')
+  
+  fr_mm <- list()
+  
+  ## Handling factors
+  if(!is.null(covar_factor_df)) {
+    ## Add contrasts to factors
+    for (x in 1:(min(ncol(covar_factor_df), 2))) stats::contrasts(covar_factor_df[,x]) <- stats::contr.sum(levels(covar_factor_df[,x]))
+    
+    ## Generate factors model matrices
+    for (x in 1:min(ncol(covar_factor_df), 2)) fr_mm[[x]] <- model.matrix(~covar_factor_df[,x])[, -1, drop = FALSE]
+    # fr_mm <- lapply(1:min(ncol(covar_factor_df), 2), function(x) { model.matrix(~covar_factor_df[,x])[, -1, drop = FALSE] })
   }
   
-  #### Testing if design matrix is full-rank
-  test.batch <- limma.bc.batch1
-  test.batch2 <- limma.bc.batch2
-  test.covariates <- limma.bc.covar
-  test.design = model.matrix(as.formula(paste0('~0+', cur.cond)), data = DE2obj@colData)
-  if (!is.null(test.batch)) {
-    test.batch <- as.factor(test.batch)
-    contrasts(test.batch) <- contr.sum(levels(test.batch))
-    test.batch <- model.matrix(~test.batch)[, -1, drop = FALSE]
-  }
-  if (!is.null(test.batch2)) {
-    test.batch2 <- as.factor(test.batch2)
-    contrasts(test.batch2) <- contr.sum(levels(test.batch2))
-    test.batch2 <- model.matrix(~test.batch2)[, -1, drop = FALSE]
-  }
-  if (!is.null(test.covariates)) test.covariates <- as.matrix(test.covariates)
-  X.batch <- cbind(test.batch, test.batch2, test.covariates)
-  test.designX = as.matrix(cbind(test.design, X.batch))
-  ne <- limma::nonEstimable(test.designX)
-  rm(test.batch, test.batch2, test.covariates, X.batch, test.designX)
+  ## Handling conti
+  if (!is.null(covar_conti_df)) fr_mm[['conti']] <- as.matrix(covar_conti_df)
   
-  if(!is.null(ne)) {
-    message(paste(ne, collapse = ', '))
-    ## Matrix is NOT full-rank, NO regression !
-    message("Can't estimate ", fc, ' as design matrix is not full-rank !')
-    # print(paste0("Can't estimate ", fc, ' as design matrix is not full-rank !'))
+  ## Merge
+  X.batch <- Reduce(f = cbind, x = fr_mm)
+  
+  ## Checking if matrix is full-rank
+  fr_check <- limma::nonEstimable(X.batch)
+  if(!is.null(fr_check)) stop('Design is not full-rank !')
+
+    ## Regression
+  if(is.null(covar_conti_df) && ncol(covar_factor_df) == 1) {
+    ### If we have a single factor, no conti
+    message('Regression with ComBat ...')
+    ber.mat <- sva::ComBat(dat = mat, batch = covar_factor_df[,1])
   } else {
-    ## Matrix is full-rank, one can regress !
-    ber_method <- 'limma'
-    if (is.null(limma.bc.batch2) & is.null(limma.bc.covar)) {
-      ## If only ONE CATEGORIAL covariate, use sva::ComBat
-      ber_method <- 'ComBat'
-      norm.mat <- sva::ComBat(dat = norm.mat, batch = limma.bc.batch1, mod = model.matrix(as.formula(paste0('~', cur.cond)), data = SummarizedExperiment::colData(DE2obj)), BPPARAM = BPPARAM)
-    } else {
-      ## Else use limma::removeBatchEffect
-      norm.mat <- limma::removeBatchEffect(x = norm.mat, batch = limma.bc.batch1, batch2 = limma.bc.batch2, covariates = limma.bc.covar, design = model.matrix(as.formula(paste0('~0+', cur.cond)), data = SummarizedExperiment::colData(DE2obj)))
-    }
-    ## Save BER matrix 
-    write.table(x = data.frame(Feature = rownames(norm.mat), norm.mat, check.names = FALSE), file = gzfile(paste0(de.dir, '/Normalized.vst.BER.', ber_method, '_matrix.tsv.gz')), sep = '\t', quote = FALSE, row.names = FALSE)
+    ### If we have a more than one factor, and/or conti
+    message('Regression with limma ...')
+    ber.mat <- limma::removeBatchEffect(x = mat, batch = if(!is.null(covar_factor_df)) covar_factor_df[,1] else NULL, batch2 = if(is.null(covar_factor_df)) NULL else if(ncol(covar_factor_df) > 1) covar_factor_df[,2] else NULL, covariates = if(!is.null(covar_conti_df)) as.matrix(covar_conti_df) else NULL)
+    ber.mat
   }
+  return(ber.mat)
 }
 
 
@@ -2696,7 +2689,7 @@ MultHeatMap <- function(exp_mat = NULL, dea_res_list = NULL, annot_df = NULL, se
 
 
 #................#
-#### EXAMPLES ####
+#### GSEA EXAMPLES ####
 #................#
 
 ## . GSEA/ORA ====

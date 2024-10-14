@@ -1,0 +1,424 @@
+---
+title: "BNNNNN_XXXX_NN RNA QC"
+author: "Bastien JOB<BR>bastien.job@gustaveroussy.fr"
+date: "`r format(Sys.time(), '%Y/%m/%d')`"
+output:
+  html_document: 
+    background: black
+    fig_height: 10
+    fig_width: 15
+    highlight: tango  ## Theme for the code chunks
+    number_sections: true  ## Adds number to headers (sections)
+    theme: flatly  ## CSS theme for the HTML page
+    toc: true  ## Adds a table of content
+    toc_float:  ## TOC options
+      collapsed: true  ## By default, the TOC is folded
+    smooth_scroll: true ## Smooth scroll of the HTML page
+    self_contained: true ## Includes all plots/images within the HTML
+    code_download: true ## Adds a button to download the Rmd
+    code_folding: show
+    thumbnails: false
+    lightbox: true
+    fig_caption: false
+    gallery: true
+    use_bookdown: true
+always_allow_html: true ## Allow plain HTML code in the Rmd
+---
+
+# Working environment setup
+
+## Variables
+
+```{r setup_var, message = FALSE}
+
+## DIRECTORIES / INPUT FILES
+
+### DIR : Main rootname (project dir)
+root_dir <- '/home/job/WORKSPACE/PROJECTS/B24012_MAMO_01_RNAseq_ICARUS_2/ICARUS_LUNG'
+
+### INPUT TYPE
+input_type <- 'rnaseq'
+# input_type <- 'geomx'
+# input_type <- 'ncounter'
+# input_type <- 'targetrna'
+# input_type <- 'affymetrix'
+
+### INPUT : expMX DSP output(s) (MS XLSX) after background correction. Can be a vector of characters, each a path to a DSP output file.
+input_table_files <- c('/home/job/WORKSPACE/PROJECTS/B24012_MAMO_01_RNAseq_ICARUS_2/ICARUS_LUNG/PIPELINE/MATRICES/Raw.genes.tsv.gz')
+
+### INPUT : Optional additional sample annotation (MS XLSX) file path. It has to be synched (same length, same sample names, same order) with the annotations from the DSP output, and first column has to be the same as this output column "SegmentDisplayName". Keep as NULL if no file to provide
+annot_filename <- '/home/job/WORKSPACE/PROJECTS/B24012_MAMO_01_RNAseq_ICARUS_2/ICARUS_LUNG/ANNOTATION/ICARUS_LUNG_annot_20240322.xlsx'
+
+
+## OTHER PARAMETERS
+
+### Analysis tag name
+analysis_name <- 'DEA'
+
+### LIST of CATEGORICAL/DISCRETE data types to enlight (by split/coloring) in plots, and assess as covariates. Keys are displayed names, values are annotation table column names
+box_categ <- list(
+  'Timepoint (v1)' = 'TimePoint_v1'
+  , 'Timepoint (v2)' = 'TimePoint_v2'
+  , 'Timepoint (v3)' = 'TimePoint_v3'
+  , 'Timepoint (precise ONT)' = 'TimePoint_precise'
+  , 'Patient' = 'Patient_id'
+  , 'Response status' = 'Response_status'
+  , 'Best response (fine)' = 'Best_response_20231204_fine'
+  , 'Best response (coarse)' = 'Best_response_20231204_coarse'
+  , 'Best confirmed response (coarse)' = 'Best_response_20231204_confirmed'
+  , 'PFS event' = 'PFS_event'
+  , 'OS event' = 'OS_event'
+  , 'Reached 15M fragments' = 'Reached_15M'
+)
+
+
+## BASIC PARAMETERS
+
+### ANNOTATION : sample names column
+annot_sn <- 'Sample_id'
+### Number of max different distant colors to generate in the RGB space, for boxplots/PCAs (should cover all possible classes in any of the requested annotation)
+ncolors <- 20
+### Fixing seed
+my_seed <- 1337
+### Residual value to add for raw counts to log conversion 
+epsilon <- 1
+### Maximal sparsity level (by default 50%)
+sparse_max <- .6
+### Minimum count per gene to keep it
+min_totcount <- 5
+### DESeq2 normalization method (only VST supported yet)
+norm_method <- 'vst'
+
+## Flags to use to discard outlying samples
+flags_to_use <- c('OL_sparsity', 'OL_AQM_RAW_heatmap', 'OL_AQM_RAW_boxplot', 'OL_AQM_NORM_heatmap')
+
+```
+
+## Setup
+
+```{r setup_set, message = FALSE}
+
+## Sourcing outside scripts (for plotting/DEA/GSEA functions)
+source('/home/job/gits/customscripts/R/RNA_functions.R')
+
+## Clean annotations colname variables
+box_categ <- lapply(box_categ, function(x) gsub(pattern = "\\W", replacement = '.', x = x))
+flags_to_use <- lapply(flags_to_use, function(x) gsub(pattern = "\\W", replacement = '.', x = x))
+
+### Results output dir
+out_dir <- paste0(root_dir, '/RESULTS')
+
+## Generate a color palette
+listcol <- distinct_color_maker(n_colors = ncolors, my_seed = my_seed)
+
+## Early setup (folders)
+analysis_name <- paste(c(analysis_name, format(Sys.time(), '%Y%m%d%H%M%S')), collapse = '_')
+work_dir <- paste(c(out_dir, analysis_name, 'QC'), collapse = '/')
+dir.create(work_dir, recursive = TRUE)
+setwd(work_dir)
+
+## Create a list for categorical future QC metrics
+qc_categ <- list()
+
+## Backup original graphical parameters
+oripar <- par(no.readonly = TRUE)
+
+```
+
+
+## Loading data
+
+```{r data_load}
+
+## Load count data
+exp_mat <- read_pipeline_matrix(file = input_table_files)
+
+## Sample names
+colnames(exp_mat)
+
+## Load annotation
+annot_df <- as.data.frame(readxl::read_excel(path = annot_filename, na = c('', 'na', 'NA')))
+
+## Clean colnames
+annot_df <- annot_df[!is.na(annot_df[[annot_sn]]),]
+colnames(annot_df) <- gsub(pattern = "\\W", replacement = '.', x = colnames(annot_df))
+rownames(annot_df) <- annot_df[[annot_sn]]
+
+## Check that all requested box_categ is available
+bc_check <- unlist(box_categ) %in% colnames(annot_df)
+if(!all(bc_check)) stop(paste0('[', paste(unlist(box_categ)[!bc_check], collapse = ', '), '] from box_categ not found in the annotation table !'))
+
+## Synch annotation and expression matrix
+annot_df <- annot_df[order(annot_df[[annot_sn]]),]
+exp_mat <- exp_mat[, order(colnames(exp_mat))]
+annot_df <- annot_df[annot_df[[annot_sn]] %in% colnames(exp_mat),]
+exp_mat <- exp_mat[, colnames(exp_mat) %in% annot_df[[annot_sn]]]
+all(colnames(exp_mat) == annot_df[[annot_sn]])
+
+## Convert box_categ entries to factors
+for (bcfac in box_categ) annot_df[[bcfac]] <- as.factor(annot_df[[bcfac]])
+
+## Write out the prepped annot/QC table
+qc_filename <- paste0(work_dir, '/', analysis_name, '_AnnotQC.xlsx')
+writexl::write_xlsx(x = annot_df, path = qc_filename, format_headers = TRUE)
+
+## Round expression matrix
+exp_mat <- round(exp_mat)
+# ## Convert to DESeqDataSet
+# de2 <- DESeq2::DESeqDataSetFromMatrix(countData = round(exp_mat), colData = annot_df, design = ~0)
+# rm(exp_mat, annot_df)
+
+```
+
+
+# Data preprocessing
+
+* Converting counts data to log10(+1).
+
+```{r countmat}
+
+## Log10 transformation
+exp_l10 <- raw2log(x = exp_mat, log_base = 10, epsilon = epsilon)
+saveRDS(exp_l10, file = paste0(work_dir, '/l10counts', epsilon, '_', ncol(exp_l10), 's.RDS'), compress = 'bzip2')
+
+```
+
+
+# RAW QC
+
+## Sample-level sparsity
+
+Here we check the sparsity level (the amount of 0-counts) for each sample.
+
+```{r raw_sparsity}
+## Global sparsity
+sparsemed <- coop::sparsity(x = exp_mat)
+## Per-sample
+sparselev <- matrixStats::colCounts(x = exp_mat, value = 0) / nrow(exp_mat)
+## Get outliers
+annot_df$OL_sparsity <- as.factor(sparselev > sparse_max)
+## Add outliers to QC flags
+if (any(annot_df$OL_sparsity == 'TRUE')) qc_categ[['OL : Sparsity']] <- 'OL_sparsity'
+table(annot_df$OL_sparsity)
+## Plot
+plot(sparselev, type = 'b', xaxs = 'i', ylim = c(0,1.1), pch = '.', cex = 4, xaxt = 'n', xlab = 'Samples', yaxs = 'i', ylab = 'Sparsity level', main = 'Sample-level sparsity')
+points(which(annot_df$OL_sparsity == 'TRUE'), sparselev[annot_df$OL_sparsity == 'TRUE'], pch = 20, col = 'brown')
+abline(h = c(sparsemed, sparse_max), lty = 3, col = c(4,2), lwd = 3)
+```
+
+*Conclusion* :
+
+* Lorem.
+* Ipsum.
+* Dolor.
+
+## Remove low-expression genes
+
+Here, we will remove genes with low expression (total gene count < `r min_totcount``)
+
+```{r remlow}
+tot_gcounts <- rowSums(exp_mat)
+dim(exp_mat)
+exp_mat <- exp_mat[tot_gcounts >= min_totcount,]
+dim(exp_mat)
+```
+
+
+## Array Quality Metrics
+
+```{r aqm_raw}
+## Handling null samples (samples with NO read)
+# exp_temp <- SummarizedExperiment::assay(de2)
+exp_temp <- exp_mat
+ncount <- colSums(exp_temp)
+exp_temp[,ncount == 0] <- 1
+temp_eset <- Biobase::ExpressionSet(assayData = exp_temp, annotation = 'expMX_WTA', phenoData = new("AnnotatedDataFrame", data = annot_df))
+rm(exp_temp)
+## Running AQM
+aqm_RAW <- arrayQualityMetrics::arrayQualityMetrics(expressionset = temp_eset, outdir = paste0(work_dir, '/AQM_RAW'), do.logtransform = TRUE, intgroup = unname(unlist(box_categ)), force = TRUE)
+rm(temp_eset)
+## Adding outlier results as new flags
+for (mod in names(aqm_RAW$modules)) {
+  message(mod)
+  modcn <- paste(c('OL', 'AQM', 'RAW', mod), collapse = '_')
+  de2@colData[[modcn]] <- factor(x = rep(FALSE, nrow(de2@colData)), levels = c(FALSE, TRUE))
+  de2@colData[[modcn]][unname(aqm_RAW$modules[[mod]]@outliers@which)] <- TRUE
+  if(any(de2@colData[[modcn]] == 'TRUE')) rownames(de2@colData)[de2@colData[[modcn]] == 'TRUE']
+  qc_categ[[modcn]] <- modcn
+}
+rm(aqm_RAW)
+
+```
+
+*Conclusion* :
+
+* Lorem.
+* Ipsum.
+* Dolor.
+
+## Boxplots
+
+Boxplots of log-transformed raw counts (ie, log10(counts+1)) for control types and expression data.
+
+```{r raw_boxp, message=FALSE}
+
+
+## RAW Boxplots
+for (bc in seq_along(box_categ)) categ.boxplot(x = exp_l10, annot_df = as.data.frame(de2@colData), col_item = box_categ[[bc]], title = names(box_categ)[bc], y_lab = "Raw counts (log10)", my_seed = my_seed)
+for (qc in seq_along(qc_categ)) categ.boxplot(x = exp_l10, annot_df = as.data.frame(de2@colData), col_item = qc_categ[[qc]], title = names(qc_categ)[qc], y_lab = "Raw counts (log10)", my_seed = my_seed)
+
+```
+
+*Conclusion* :
+
+* Lorem.
+* Ipsum.
+* Dolor.
+
+
+# Normalization
+
+Expression is first normalized by computing scaling factors, taking care of batch, then using variance stabilization.
+
+The method used is :
+
+```{r normmethod}
+norm_method
+```
+
+
+```{r norm, message=FALSE}
+## Computing size factors and dispersion
+de2 <- DESeq2::estimateSizeFactors(object = de2)
+saveRDS(de2, file = paste0(work_dir, '/DESeq2Obj_Raw.RDS'), compress = 'bzip2')
+## Normalization
+if (tolower(norm_method) == 'vst') {
+  message('Normalizing using vst ...')
+  de2.norm <- DESeq2::vst(object = de2, blind = TRUE, nsub = 200)
+} else if (tolower(norm_method) == 'rlog') {
+  message('Normalizing using rlog ...')
+  de2.norm <- DESeq2::rlog(object = de2, blind = TRUE)
+}
+rm(de2)
+## Extract the normalized matrix
+# exp_norm <- SummarizedExperiment::assay(de2.norm, normalized = TRUE)
+## Save it
+saveRDS(de2.norm, file = paste0(work_dir, '/DESeq2Obj_Norm.', tolower(norm_method), '.RDS'), compress = 'bzip2')
+## Add the sizeFactor as a new sample annotation
+# annot_df$sizeFactor <- de2.norm$sizeFactor
+```
+
+# Norm QC
+
+
+## Array Quality Metrics
+
+```{r aqm_raw}
+temp_eset <- Biobase::ExpressionSet(assayData = SummarizedExperiment::assay(de2.norm), annotation = 'expMX_WTA', phenoData = new("AnnotatedDataFrame",data = as.data.frame(de2.norm@colData)))
+## Running AQM
+aqm_NORM <- arrayQualityMetrics::arrayQualityMetrics(expressionset = temp_eset, outdir = paste0(work_dir, '/AQM_NORM'), do.logtransform = FALSE, intgroup = unname(unlist(box_categ)), force = TRUE)
+rm(temp_eset)
+## Adding outlier results as new flags
+for (mod in names(aqm_NORM$modules)) {
+  message(mod)
+  modcn <- paste(c('OL', 'AQM', 'NORM', mod), collapse = '_')
+  de2.norm@colData[[modcn]] <- factor(x = rep(FALSE, nrow(de2.norm@colData)), levels = c(FALSE, TRUE))
+  de2.norm@colData[[modcn]][unname(aqm_NORM$modules[[mod]]@outliers@which)] <- TRUE
+  if(any(de2.norm@colData[[modcn]] == 'TRUE')) rownames(de2.norm@colData)[de2.norm@colData[[modcn]] == 'TRUE']
+  qc_categ[[modcn]] <- modcn
+}
+rm(aqm_NORM)
+
+```
+
+*Conclusion* :
+
+* Lorem.
+* Ipsum.
+* Dolor.
+
+## Boxplot
+
+Boxplot of normalized expression, after normalisation.
+
+```{r norm_boxp, message=FALSE}
+## NORM Boxplot
+for (bc in seq_along(box_categ)) categ.boxplot(x = SummarizedExperiment::assay(de2.norm), annot_df = as.data.frame(de2.norm@colData), col_item = box_categ[[bc]], title = names(box_categ)[bc], y_lab = "Normalized counts", my_seed = my_seed)
+for (qc in seq_along(qc_categ)) categ.boxplot(x = SummarizedExperiment::assay(de2.norm), annot_df = as.data.frame(de2.norm@colData), col_item = qc_categ[[qc]], title = names(qc_categ)[qc], y_lab = "Normalized counts", my_seed = my_seed)
+```
+
+*Conclusion* :
+
+* Lorem.
+* Ipsum.
+* Dolor.
+
+## PCA
+
+PCA is used to evaluate how the data dimensionality could be reduced from our multiple samples. Working on human data, we do not expect by default a high representation of the variance by a very limited set of very first components. It is also used to detect outlying samples, and in best cases gives ideas of the data structure (ie, most evident clusters).
+
+```{r pca, message=FALSE}
+## PCAs on normalized assay
+for (bc in names(box_categ)) {
+  message(bc)
+  de2.pca.batch <- DESeq2::plotPCA(de2.norm, intgroup = box_categ[[bc]])
+  print(de2.pca.batch + ggplot2::geom_point(data = data.frame(PC1 = get_medoid(x = de2.pca.batch$data$PC1, split = de2.pca.batch$data$group), PC2 = get_medoid(x = de2.pca.batch$data$PC2, split = de2.pca.batch$data$group), group = levels(de2.pca.batch$data$group)), shape = 13, size = 8) + ggplot2::labs(title = bc))
+}
+for (qc in names(qc_categ)) {
+  message(qc)
+  de2.pca.batch <- DESeq2::plotPCA(de2.norm, intgroup = qc_categ[[qc]])
+  print(de2.pca.batch + ggplot2::geom_point(data = data.frame(PC1 = get_medoid(x = de2.pca.batch$data$PC1, split = de2.pca.batch$data$group), PC2 = get_medoid(x = de2.pca.batch$data$PC2, split = de2.pca.batch$data$group), group = levels(de2.pca.batch$data$group)), shape = 13, size = 8) + ggplot2::labs(title = qc))
+}
+```
+
+*Conclusion* :
+
+* Lorem.
+* Ipsum.
+* Dolor.
+
+# Outlier filtering
+
+Here we will filter outlying samples thanks to the multiple metrics we generated
+
+```{r qc_filt}
+flags_to_use
+all(flags_to_use %in% colnames(de2.norm@colData))
+samples_keep <- unname(matrixStats::rowCounts(x = as.matrix(de2.norm@colData[,flags_to_use]), value = 2) == 0)
+de2.norm$QC_sample_kept <- as.factor(samples_keep)
+
+## Discarded sample(s)
+colnames(de2.norm)[!samples_keep]
+
+```
+
+*Conclusion* :
+
+* Lorem.
+* Ipsum.
+* Dolor.
+
+# Saving
+
+```{r}
+SummarizedExperiment::colData(de2) <- SummarizedExperiment::colData(de2.norm)
+
+## Write out the prepped annot/QC table
+qc_filename <- paste0(work_dir, '/', analysis_name, '_AnnotQC.xlsx')
+writexl::write_xlsx(x = as.data.frame(de2@colData), path = qc_filename, format_headers = TRUE)
+WriteXLS::WriteXLS(x = as.data.frame(de2@colData), ExcelFileName = qc_filename, AdjWidth = TRUE, AutoFilter = TRUE, BoldHeaderRow = TRUE, na = NA)
+
+## Export filtered DESeq2 object with all annotation/QC metrics
+out.de2 <- de2[,samples_keep]
+out.de2@colData$sizeFactor <- NULL
+saveRDS(object = out.de2, file = paste0(work_dir, '/Raw_outlier.filtered_', length(which(samples_keep)), 's.RDS'), compress = 'bzip2')
+
+```
+
+# Rsession
+
+```{r sessioninfo}
+
+sessionInfo()
+
+```
