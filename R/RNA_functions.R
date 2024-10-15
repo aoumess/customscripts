@@ -1188,7 +1188,7 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
     message(mycoef)
     message(cur.name)
     
-    ## Getting results table for current contrast ====
+    ### Getting results table for current contrast ====
     # mycontrast <- sapply(all.combz[[mycomb]], function(x) { paste0(cur.cond, x)}, simplify = FALSE)
     # mycontrast <- list(cur.condA, cur.condB)
     mycontrast <- list(paste0(cur.cond, cur.condA), paste0(cur.cond, cur.condB))
@@ -1274,7 +1274,7 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
       gdir <- paste0(cut.dir, '/boxplots')
       dir.create(path = gdir, recursive = TRUE)
       for (g in sig.genes[1:(min(length(sig.genes), or.top.max))]) {
-        pf <- paste0(gdir, '/', g, '_norm.exp_boxplot.svg')
+        pf <- paste0(gdir, '/', gsub(pattern = "\\W", replacement = '.', x = g), '_norm.exp_boxplot.svg')
         pw <- 800
         ph <- 600
         svg(filename = pf, width = pw/96, height = ph/96)
@@ -1332,14 +1332,14 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
                                                                , raster_device = 'png'
               ))
               ## Draw heatmap
-              pf <- paste0(cut.dir, '/', cur.name, '_sig.', nrow(z.mat), 'x', ncol(z.mat), '_', paste(c(gdm, ghm, sdm, shm), collapse = "_"), '.heatmap.svg')
+              pf_root <- paste0(cut.dir, '/', cur.name, '_sig.', nrow(z.mat), 'x', ncol(z.mat), '_', paste(c(gdm, ghm, sdm, shm), collapse = "_"))
               pw <- (max(min(ncol(z.mat) * 15, 2000), 600) + 200)
               ph <- (min(length(sig.genes) * 10, 5000) + 300)
-              svg(filename = pf, width = pw/96, height = ph/96)
+              svg(filename = paste0(pf_root, '.heatmap.svg'), width = pw/96, height = ph/96)
               ComplexHeatmap::draw(myHM)
               svg_off()
-              # dev.off()
-              # svg_convert(svg_files = pf, format = 'png', height = ph)
+              saveRDS(object = hc.s, file = paste0(pf_root, '.samples.hclust.rds'))
+              saveRDS(object = hc.g, file = paste0(pf_root, '.genes.hclust.rds'))
             }
           }
         }
