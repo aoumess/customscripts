@@ -42,7 +42,19 @@ for (pkgn in sort(unique(names(gith_list)))) if(! pkgn %in% installed.packages()
 #.................#
 
 ## Functions to write plots to SVG that automatically generates a PNG too.
-source('https://github.com/aoumess/customscripts/raw/refs/heads/main/R/svg_png.R')
+source_files <- c('svg_png.R')
+source_remote_dir <- 'https://github.com/aoumess/customscripts/raw/refs/heads/main/R'
+source_local_dir <- '/home/job/gits/customscripts/R'
+for (sf in source_files) {
+  try_sf <- try(source(paste(c(source_remote_dir, sf), collapse = '/')), silent = TRUE)
+  if (is(try_sf, class2 = 'try-error')) {
+    try_sf <- try(source(paste(c(source_local_dir, sf), collapse = '/')), silent = TRUE)
+    if (is(try_sf, class2 = 'try-error')) {
+      stop(paste0('Could not source script [', sf, '] (remotely nor localy'))
+    }
+  }
+}
+
 
 #.................#
 # FUNCTIONS ####
@@ -295,6 +307,40 @@ get_kegg_gmt <- function(org = 'hsa', gmt_file = NULL, gene_id_type = 'ENTREZID'
   kegg_gmt <- EnrichmentBrowser::getGenesets(org = 'hsa', db = 'kegg', cache = FALSE, gene.id.type = gene_id_type)
   if(!is.null(gmt_file)) EnrichmentBrowser::writeGMT(gs = kegg_gmt, gmt.file = gmt_file)
   if(!is.null(return_gmt)) return(kegg_gmt)
+}
+
+## Convert GMT entries (symbols to Entrez, inversely)
+gmt_convert <- function(gmt_file_in = NULL, gmt_file_out = NULL, gene_type_in = 'SYMBOL', gene_type_out = 'ENTREZID', species = 'Homo sapiens') {
+  if(is.null(gmt_file_in)) stop('An input GMT file is required !')
+  if(!file.exists(gmt_file_in)) stop('Input GMT not found !')
+  if(is.null(gmt_file_out)) stop('An output GMT file is required !')
+  
+  good_types <- c('ENTREZID', 'SYMBOL', 'ENSEMBL')
+  if (!gene_type_in %in% good_types) stop('Input gene type is not valid !')
+  if (!gene_type_out %in% good_types) stop('Output gene type is not valid !')
+  
+  ## Read GMT
+  in_gmt <- clusterProfiler::read.gmt(gmtfile = gmt_file_in)
+  
+  ## Get conversion df from bitr
+  gmult <- as.data.frame(base::as.list(clusterProfiler::bitr(unique(in_gmt$gene), fromType = toupper(gene_type_in), toType = toupper(gene_type_out), OrgDb = paste0(msigdbr2org(species), '.db'))))
+  ## Filter multi-hits
+  gmult <- gmult[Biobase::isUnique(gmult[[gene_type_in]]) & Biobase::isUnique(gmult[[gene_type_out]]),]
+  ## Set conversion vector
+  gconv <- setNames(object = gmult[[gene_type_out]], nm = gmult[[gene_type_in]])
+  ## Restrict input gmt to convertible genes
+  in_gmt <- in_gmt[in_gmt$gene %in% names(gconv),]
+  ## Convert
+  in_gmt$gene <- gconv[in_gmt$gene]
+  ## Remove levels if some terms are not covered anymore
+  in_gmt$term <- droplevels(in_gmt$term)
+  
+  ## Write converted GMT
+  out_gmt <- lapply(levels(in_gmt$term), function(x) {
+    in_gmt$gene[in_gmt$term == x]
+  })
+  names(out_gmt) <- levels(in_gmt$term)
+  EnrichmentBrowser::writeGMT(gs = out_gmt, gmt.file = gzfile(gmt_file_out))
 }
 
 
@@ -560,7 +606,12 @@ assess_covar <- function(mat = NULL, annot.df = NULL, factor.names = NULL, conti
     mat <- mat[order(svmat) <= topvar,]
   }
   
-  ## Center / scale ?
+  ## Convert conti to Zscores
+  if (!is.null(conti.names)) {
+    for (x in conti.names) annot.df[[x]] <- (annot.df[[x]] - mean(annot.df[[x]], na.rm = TRUE)) / sd(annot.df[[x]], na.rm = TRUE)
+  }
+  
+  ## Center / scale the matrix ?
   if (any(c(center, scale))) mat <- base::scale(x = mat, center = center, scale = scale)
   ## Dimension reduction
   if (tolower(red.method) == 'pca') norm.red <- base::svd(x = mat, nv = ndim.max)$v
@@ -599,7 +650,7 @@ assess_covar <- function(mat = NULL, annot.df = NULL, factor.names = NULL, conti
                                    cluster_columns = FALSE,
                                    rect_gp = grid::gpar(col = "darkgrey", lwd=0.5),
                                    column_title = 'Batch factors and covariates weight on dataset',
-                                   row_title = 'SVD dimensions',
+                                   row_title = paste0(toupper(red.method), ' dimensions'),
                                    column_split = col.types,
                                    top_annotation = ComplexHeatmap::HeatmapAnnotation(Type = col.types, col = list(Type = setNames(object = c('lightblue','pink'), nm = c('factor', 'continuous')))))
   svg(filename = out.file, width = width/96, height = height/96)
@@ -692,16 +743,29 @@ full_design_generator <- function(init_df = NULL, samples_colname = NULL, covar_
 }
 
 
-## Regress a matrix with covariates
-matrix_covar_regress <- function(mat = NULL, covar_factor_df = NULL, covar_conti_df = NULL) {
+## Regress a matrix with covariates ====
+## mat : a numeric matrix of expression data. Can be of type 'counts' (raw counts, to apply sva::Combat_seq), or 'norm' (normalized data, to apply sva::Combat or limma::removeBatchEffect)
+## type : ['counts'|'norm'] for raw counts or normalized data. The output matrix will be of the same type !
+## covar_factor_df : data.frame that contains factors to regress (synched with the mat columns)
+## covar_conti_df : data.frame that contains continuous data to regress (synched with the mat columns)
+matrix_covar_regress <- function(mat = NULL, type = 'counts', covar_factor_df = NULL, covar_conti_df = NULL, group = NULL) {
   ## Checks
   if (is.null(mat)) stop('A matrix is required !')
+  if (!tolower(type) %in% c('counts', 'norm')) stop('type should be one of "counts" (raw counts) or "norm" (normalized data) !')
   if (all(is.null(c(covar_factor_df, covar_conti_df)))) stop('covar_factor_df and covar_conti_df should not be simultaneously NULL !')
   if (!is.matrix(mat)) stop('mat should be a matrix !')
   if (!is.numeric(as.vector(mat))) stop('mat should be a numeric matrix !')
   if (!is.null(covar_factor_df)) {
     if (!is.data.frame(covar_factor_df)) stop('covar_factor_df should be a data.frame !')
-    if(ncol(covar_factor_df) > 2) warning('More than 2 factors found in covar_factor_df : only the first 2 will be used (ComBat limitation) !')
+    if (tolower(type) %in% 'counts') {
+      if (!is.null(covar_conti_df)) {
+        stop('On counts data, only sva::Combat_seq can be used, and is compatible with a single factor, not continuous data !')
+      } else if (ncol(covar_factor_df) > 1) {
+        stop('On counts data, only sva::Combat_seq can be used, and is compatible with a single factor, not multiple !')
+      }
+    } else if (ncol(covar_factor_df) > 2) {
+        stop('On normalized data, limma::removeBatchEffect can be used, and is compatible with a 2 factor covariates at most (there is no limit on continous covariates, though) !')
+    }
   }
   if (!is.null(covar_conti_df) & !is.data.frame(covar_conti_df)) stop('covar_conti_df should be a data.frame !')
   if (!all(vapply(covar_factor_df, is.factor, TRUE))) stop('All columns in covar_factor_df should be factors !')
@@ -711,12 +775,18 @@ matrix_covar_regress <- function(mat = NULL, covar_factor_df = NULL, covar_conti
   
   ## Handling factors
   if(!is.null(covar_factor_df)) {
-    ## Add contrasts to factors
-    for (x in 1:(min(ncol(covar_factor_df), 2))) stats::contrasts(covar_factor_df[,x]) <- stats::contr.sum(levels(covar_factor_df[,x]))
+    # ## Add contrasts to factors
+    # for (x in 1:(min(ncol(covar_factor_df), 2))) stats::contrasts(covar_factor_df[,x]) <- stats::contr.sum(levels(covar_factor_df[,x]))
+    # 
+    # ## Generate factors model matrices
+    # for (x in 1:min(ncol(covar_factor_df), 2)) fr_mm[[x]] <- model.matrix(~covar_factor_df[,x])[, -1, drop = FALSE]
     
+    temp_factor_df <- if(is.null(group)) covar_factor_df else cbind(covar_factor_df, group)
+    
+    ## Add contrasts to factors
+    for (x in seq_len(ncol(temp_factor_df))) stats::contrasts(temp_factor_df[,x]) <- stats::contr.sum(levels(temp_factor_df[,x]))
     ## Generate factors model matrices
-    for (x in 1:min(ncol(covar_factor_df), 2)) fr_mm[[x]] <- model.matrix(~covar_factor_df[,x])[, -1, drop = FALSE]
-    # fr_mm <- lapply(1:min(ncol(covar_factor_df), 2), function(x) { model.matrix(~covar_factor_df[,x])[, -1, drop = FALSE] })
+    for (x in seq_len(ncol(temp_factor_df))) fr_mm[[x]] <- model.matrix(~temp_factor_df[,x])[, -1, drop = FALSE]
   }
   
   ## Handling conti
@@ -729,17 +799,35 @@ matrix_covar_regress <- function(mat = NULL, covar_factor_df = NULL, covar_conti
   fr_check <- limma::nonEstimable(X.batch)
   if(!is.null(fr_check)) stop('Design is not full-rank !')
 
-    ## Regression
-  if(is.null(covar_conti_df) && ncol(covar_factor_df) == 1) {
-    ### If we have a single factor, no conti
-    message('Regression with ComBat ...')
-    ber.mat <- sva::ComBat(dat = mat, batch = covar_factor_df[,1])
+  # ## Regression
+  # if(is.null(covar_conti_df) && ncol(covar_factor_df) == 1) {
+  #   ### If we have a single factor, no conti
+  #   if (tolower(type) %in% 'norm') {
+  #     message('Regression with ComBat ...')
+  #     # ber.mat <- sva::ComBat(dat = mat, batch = covar_factor_df[,1], group = group)
+  #     ber.mat <- sva::ComBat(dat = mat, batch = covar_factor_df[,1], mod = model.matrix(~group)[, -1, drop = FALSE])
+  #     
+  #   } else if (tolower(type) %in% 'counts') {
+  #     message('Regression with ComBatSeq ...')
+  #     ber.mat <- sva::ComBat_seq(counts = mat, batch = covar_factor_df[,1], group = group, full_mod = !is.null(group))
+  #   }
+  # } else {
+  #   ### If we have more than one factor, and/or conti
+  #   message('Regression with limma ...')
+  #   ber.mat <- limma::removeBatchEffect(x = mat, batch = if(!is.null(covar_factor_df)) covar_factor_df[,1] else NULL, batch2 = if(is.null(covar_factor_df)) NULL else if(ncol(covar_factor_df) > 1) covar_factor_df[,2] else NULL, covariates = if(!is.null(covar_conti_df)) as.matrix(covar_conti_df) else NULL, group = group)
+  # }
+  
+  ## Regression
+  if(is.null(covar_conti_df) && ncol(covar_factor_df) == 1 && (tolower(type) %in% 'counts')) {
+    ### ComBatSeq mode
+    message('Regression with ComBatSeq ...')
+    ber.mat <- sva::ComBat_seq(counts = mat, batch = covar_factor_df[,1], group = group, full_mod = !is.null(group))
   } else {
-    ### If we have a more than one factor, and/or conti
+    ### If we have more than one factor, and/or conti
     message('Regression with limma ...')
-    ber.mat <- limma::removeBatchEffect(x = mat, batch = if(!is.null(covar_factor_df)) covar_factor_df[,1] else NULL, batch2 = if(is.null(covar_factor_df)) NULL else if(ncol(covar_factor_df) > 1) covar_factor_df[,2] else NULL, covariates = if(!is.null(covar_conti_df)) as.matrix(covar_conti_df) else NULL)
-    ber.mat
+    ber.mat <- limma::removeBatchEffect(x = mat, batch = if(!is.null(covar_factor_df)) covar_factor_df[,1] else NULL, batch2 = if(is.null(covar_factor_df)) NULL else if(ncol(covar_factor_df) > 1) covar_factor_df[,2] else NULL, covariates = if(!is.null(covar_conti_df)) as.matrix(covar_conti_df) else NULL, group = group)
   }
+  
   return(ber.mat)
 }
 
@@ -968,7 +1056,10 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
     
     ## Normalizing by vst (for PCA & heatmap) ====
     DE2obj.norm <- DESeq2::vst(object = DE2obj, blind = TRUE, nsub = vst_nsub)
+    
+    ## Defining the VST-normalized matrix as default normalized data
     norm.mat <- SummarizedExperiment::assay(DE2obj.norm)
+    
     ## Save VST matrix 
     write.table(x = data.frame(Feature = rownames(norm.mat), norm.mat, check.names = FALSE), file = gzfile(paste0(de.dir, '/Normalized.vst_matrix.tsv.gz')), sep = '\t', quote = FALSE, row.names = FALSE)
 
@@ -980,68 +1071,188 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
       for (cn in cur.covars) {
         if (is.factor(DE2obj@colData[[cn]])) factor.colnames <- c(factor.colnames, cn) else if (is.numeric(DE2obj@colData[[cn]])) conti.colnames <- c(conti.colnames, cn) else stop(paste0('Covariate [', cn, '] is neither a factor nor a numeric/integer vector !'))
       }
-      #### Assessing covariates
-      try(assess_covar(mat = norm.mat, annot.df = as.data.frame(DE2obj@colData), factor.names = c(cur.cond, factor.colnames), conti.names = conti.colnames, red.method = 'pca', ndim.max = round(ncol(norm.mat)/2), center = TRUE, scale = TRUE, out.file = paste0(de.dir, '/', cur.cond, '_assess_covariates_01_unregressed.svg')))
-      #### Running limma::removeBatchEffect the good way
-      limma.bc.batch2 <- limma.bc.batch1 <- limma.bc.covar <- NULL
-      ##### Handling factor covariates
-      for (fc in factor.colnames) {
-        message(paste0('ASSESS COVAR FACTOR COVAR : ', fc))
-        if (is.null(limma.bc.batch1)) {
-          limma.bc.batch1 <- DE2obj@colData[[fc]]
-        } else if (is.null(limma.bc.batch2)) {
-          limma.bc.batch2 <- DE2obj@colData[[fc]]
-        } else message(paste0('Factor [', fc, '] will not be considered for matrix regression by limma::removeBatchEffect as ony 2 factors can be used.'))
-      }
-      ##### Handling continuous covariates
-      for (cc in conti.colnames) {
-        message(paste0('ASSESS COVAR CONTI COVAR : ', cc))
-        if (is.null(limma.bc.covar)) limma.bc.covar <- as.matrix(DE2obj@colData[, cc, drop = FALSE]) else limma.bc.covar <- cbind(limma.bc.covar, as.matrix(DE2obj@colData[, cc, drop = FALSE]))
-      }
+      ### UNREGRESSED
+      ## ALL genes
+      try(assess_covar(
+        mat = norm.mat
+        , annot.df = as.data.frame(SummarizedExperiment::colData(DE2obj))
+        , factor.names = c(cur.cond, factor.colnames)
+        , conti.names = conti.colnames
+        , red.method = 'pca'
+        , ndim.max = min(round(ncol(norm.mat)/2), 20)
+        , center = TRUE 
+        , scale = TRUE 
+        , out.file = paste(c(paste0(de.dir, '/', cur.cond), 'assess', 'covariates', 'All', '01', 'unregressed.svg'), collapse = '_')
+        ))
+      ## Topvar
+      ## ALL genes
+      try(assess_covar(
+        mat = norm.mat
+        , annot.df = as.data.frame(SummarizedExperiment::colData(DE2obj))
+        , factor.names = c(cur.cond, factor.colnames) 
+        , conti.names = conti.colnames
+        , red.method = 'pca'
+        , topvar = vst_nsub
+        , ndim.max = min(round(ncol(norm.mat)/2), 20)
+        , center = TRUE
+        , scale = TRUE
+        , out.file = paste(c(paste0(de.dir, '/', cur.cond), 'assess', 'covariates', paste0('Top', vst_nsub), '01', 'unregressed.svg'), collapse = '_')
+      ))
       
-      #### Testing if design matrix is full-rank
-      test.batch <- limma.bc.batch1
-      test.batch2 <- limma.bc.batch2
-      test.covariates <- limma.bc.covar
-      test.design = model.matrix(as.formula(paste0('~0+', cur.cond)), data = DE2obj@colData)
-      if (!is.null(test.batch)) {
-        test.batch <- as.factor(test.batch)
-        contrasts(test.batch) <- contr.sum(levels(test.batch))
-        test.batch <- model.matrix(~test.batch)[, -1, drop = FALSE]
-      }
-      if (!is.null(test.batch2)) {
-        test.batch2 <- as.factor(test.batch2)
-        contrasts(test.batch2) <- contr.sum(levels(test.batch2))
-        test.batch2 <- model.matrix(~test.batch2)[, -1, drop = FALSE]
-      }
-      if (!is.null(test.covariates)) test.covariates <- as.matrix(test.covariates)
-      X.batch <- cbind(test.batch, test.batch2, test.covariates)
-      test.designX = as.matrix(cbind(test.design, X.batch))
-      ne <- limma::nonEstimable(test.designX)
-      rm(test.batch, test.batch2, test.covariates, X.batch, test.designX)
-      
-      if(!is.null(ne)) {
-        message(paste(ne, collapse = ', '))
-        ## Matrix is NOT full-rank, NO regression !
-        message("Can't estimate ", fc, ' as design matrix is not full-rank !')
-        # print(paste0("Can't estimate ", fc, ' as design matrix is not full-rank !'))
+      ### REGRESSED
+      #### Performing regression
+      ber_method <- NULL
+      if (length(factor.colnames) == 1 & is.null(conti.colnames) && min(table(SummarizedExperiment::colData(DE2obj)[[factor.colnames[1]]])) > 1) {
+        ## sva::Combat_seq case !
+        ber.method <- 'CombatSeq'
+        ber_mat <- try(
+          DESeq2::vst(
+            object = matrix_covar_regress(
+              mat = SummarizedExperiment::assay(DE2obj)
+              , type = 'counts'
+              , covar_factor_df = if(is.null(factor.colnames)) NULL else as.data.frame(SummarizedExperiment::colData(DE2obj))[, factor.colnames, drop = FALSE]
+              , covar_conti_df = if(is.null(conti.colnames)) NULL else as.data.frame(SummarizedExperiment::colData(DE2obj))[, conti.colnames, drop = FALSE]
+              , group = as.factor(SummarizedExperiment::colData(DE2obj)[[cur.cond]])
+              )
+            , blind = TRUE
+            , nsub = vst_nsub
+            )
+          , silent = TRUE)
       } else {
-        ## Matrix is full-rank, one can regress !
+        ## limma::RemoveBatchEffect case !
         ber_method <- 'limma'
-        if (is.null(limma.bc.batch2) & is.null(limma.bc.covar)) {
-        ## If only ONE CATEGORIAL covariate, use sva::ComBat
-          ber_method <- 'ComBat'
-          norm.mat <- sva::ComBat(dat = norm.mat, batch = limma.bc.batch1, mod = model.matrix(as.formula(paste0('~', cur.cond)), data = SummarizedExperiment::colData(DE2obj)), BPPARAM = BPPARAM)
-        } else {
-        ## Else use limma::removeBatchEffect
-        norm.mat <- limma::removeBatchEffect(x = norm.mat, batch = limma.bc.batch1, batch2 = limma.bc.batch2, covariates = limma.bc.covar, design = model.matrix(as.formula(paste0('~0+', cur.cond)), data = SummarizedExperiment::colData(DE2obj)))
-        }
+        ber_mat <- try(
+          matrix_covar_regress(
+            mat = norm.mat
+            , type = 'norm'
+            , covar_factor_df = if (is.null(factor.colnames)) NULL else as.data.frame(SummarizedExperiment::colData(DE2obj))[, factor.colnames, drop = FALSE]
+            , covar_conti_df = if (is.null(conti.colnames)) NULL else as.data.frame(SummarizedExperiment::colData(DE2obj))[, conti.colnames, drop = FALSE]
+            , group = as.factor(SummarizedExperiment::colData(DE2obj)[[cur.cond]])
+            )
+          , silent = TRUE)
+      }
+      
+      ## If no error, one can assess the regression results
+      if (!is(ber_mat, class2 = 'try-error')) {
         ## Save BER matrix 
-        write.table(x = data.frame(Feature = rownames(norm.mat), norm.mat, check.names = FALSE), file = gzfile(paste0(de.dir, '/Normalized.vst.BER.', ber_method, '_matrix.tsv.gz')), sep = '\t', quote = FALSE, row.names = FALSE)
+        write.table(x = data.frame(Feature = rownames(ber_mat), ber_mat, check.names = FALSE), file = gzfile(paste0(de.dir, '/Normalized.vst.BER.', ber_method, '_matrix.tsv.gz')), sep = '\t', quote = FALSE, row.names = FALSE)
         
         ### Assessing covariates (after regression)
-        try(assess_covar(mat = norm.mat, annot.df = as.data.frame(DE2obj@colData), factor.names = c(cur.cond, factor.colnames), conti.names = conti.colnames, red.method = 'pca', ndim.max = round(ncol(norm.mat)/2), center = TRUE, scale = TRUE, out.file = paste0(de.dir, '/', cur.cond, '_assess_covariates_02_regressed.svg')))
+        ## All genes
+        try(assess_covar(
+          mat = ber_mat
+          , annot.df = as.data.frame(DE2obj@colData)
+          , factor.names = c(cur.cond, factor.colnames)
+          , conti.names = conti.colnames
+          , red.method = 'pca'
+          , ndim.max = min(round(ncol(ber_mat)/2), 20)
+          , center = TRUE
+          , scale = TRUE
+          , out.file = paste(c(paste0(de.dir, '/', cur.cond), 'assess', 'covariates', 'All', '02', paste(c('regressed', ber_method, 'svg'), collapse = '.')), collapse = '_')
+        ))
+        ## Topvar
+        try(assess_covar(
+          mat = ber_mat
+          , annot.df = as.data.frame(DE2obj@colData)
+          , factor.names = c(cur.cond, factor.colnames)
+          , conti.names = conti.colnames
+          , red.method = 'pca'
+          , topvar = vst_nsub
+          , ndim.max = min(round(ncol(ber_mat)/2), 20)
+          , center = TRUE
+          , scale = TRUE
+          , out.file = paste(c(paste0(de.dir, '/', cur.cond), 'assess', 'covariates', paste0('Top', vst_nsub), '02', paste(c('regressed', ber_method, 'svg'), collapse = '.')), collapse = '_')
+        ))
+        
+        ## Set the regressed matrix as default normalized data
+        norm.mat <- ber_mat
       }
+      
+      # #### Running limma::removeBatchEffect the good way
+      # limma.bc.batch2 <- limma.bc.batch1 <- limma.bc.covar <- NULL
+      # ##### Handling factor covariates
+      # for (fc in factor.colnames) {
+      #   message(paste0('ASSESS COVAR FACTOR COVAR : ', fc))
+      #   if (is.null(limma.bc.batch1)) {
+      #     limma.bc.batch1 <- DE2obj@colData[[fc]]
+      #   } else if (is.null(limma.bc.batch2)) {
+      #     limma.bc.batch2 <- DE2obj@colData[[fc]]
+      #   } else message(paste0('Factor [', fc, '] will not be considered for matrix regression by limma::removeBatchEffect as ony 2 factors can be used.'))
+      # }
+      # ##### Handling continuous covariates
+      # for (cc in conti.colnames) {
+      #   message(paste0('ASSESS COVAR CONTI COVAR : ', cc))
+      #   if (is.null(limma.bc.covar)) limma.bc.covar <- as.matrix(DE2obj@colData[, cc, drop = FALSE]) else limma.bc.covar <- cbind(limma.bc.covar, as.matrix(DE2obj@colData[, cc, drop = FALSE]))
+      # }
+      # 
+      # #### Testing if design matrix is full-rank
+      # test.batch <- limma.bc.batch1
+      # test.batch2 <- limma.bc.batch2
+      # test.covariates <- limma.bc.covar
+      # test.design = model.matrix(as.formula(paste0('~0+', cur.cond)), data = DE2obj@colData)
+      # if (!is.null(test.batch)) {
+      #   test.batch <- as.factor(test.batch)
+      #   contrasts(test.batch) <- contr.sum(levels(test.batch))
+      #   test.batch <- model.matrix(~test.batch)[, -1, drop = FALSE]
+      # }
+      # if (!is.null(test.batch2)) {
+      #   test.batch2 <- as.factor(test.batch2)
+      #   contrasts(test.batch2) <- contr.sum(levels(test.batch2))
+      #   test.batch2 <- model.matrix(~test.batch2)[, -1, drop = FALSE]
+      # }
+      # if (!is.null(test.covariates)) test.covariates <- as.matrix(test.covariates)
+      # X.batch <- cbind(test.batch, test.batch2, test.covariates)
+      # test.designX = as.matrix(cbind(test.design, X.batch))
+      # ne <- limma::nonEstimable(test.designX)
+      # rm(test.batch, test.batch2, test.covariates, X.batch, test.designX)
+      # 
+      # if(!is.null(ne)) {
+      #   message(paste(ne, collapse = ', '))
+      #   ## Matrix is NOT full-rank, NO regression !
+      #   message("Can't estimate ", fc, ' as design matrix is not full-rank !')
+      #   # print(paste0("Can't estimate ", fc, ' as design matrix is not full-rank !'))
+      # } else {
+      #   ## Matrix is full-rank, one can regress !
+      #   ber_method <- 'limma'
+      #   if (is.null(limma.bc.batch2) & is.null(limma.bc.covar)) {
+      #   ## If only ONE CATEGORIAL covariate, use sva::ComBat
+      #     ber_method <- 'ComBat'
+      #     norm.mat <- sva::ComBat(dat = norm.mat, batch = limma.bc.batch1, mod = model.matrix(as.formula(paste0('~', cur.cond)), data = SummarizedExperiment::colData(DE2obj)), BPPARAM = BPPARAM)
+      #   } else {
+      #   ## Else use limma::removeBatchEffect
+      #   norm.mat <- limma::removeBatchEffect(x = norm.mat, batch = limma.bc.batch1, batch2 = limma.bc.batch2, covariates = limma.bc.covar, design = model.matrix(as.formula(paste0('~0+', cur.cond)), data = SummarizedExperiment::colData(DE2obj)))
+      #   }
+      #   
+      #   ## Save BER matrix 
+      #   write.table(x = data.frame(Feature = rownames(norm.mat), norm.mat, check.names = FALSE), file = gzfile(paste0(de.dir, '/Normalized.vst.BER.', ber_method, '_matrix.tsv.gz')), sep = '\t', quote = FALSE, row.names = FALSE)
+      #   
+      #   ### Assessing covariates (after regression)
+      #   ## All genes
+      #   try(assess_covar(
+      #     mat = norm.mat
+      #     , annot.df = as.data.frame(DE2obj@colData)
+      #     , factor.names = c(cur.cond, factor.colnames)
+      #     , conti.names = conti.colnames
+      #     , red.method = 'pca'
+      #     , ndim.max = round(ncol(norm.mat)/2)
+      #     , center = TRUE
+      #     , scale = TRUE
+      #     , out.file = paste(c(paste0(de.dir, '/', cur.cond), 'assess', 'covariates', 'All', '02', 'regressed.svg'), collapse = '_')
+      #     ))
+      #   ## Topvar
+      #   try(assess_covar(
+      #     mat = norm.mat
+      #     , annot.df = as.data.frame(DE2obj@colData)
+      #     , factor.names = c(cur.cond, factor.colnames)
+      #     , conti.names = conti.colnames
+      #     , red.method = 'pca'
+      #     , topvar = vst_nsub
+      #     , ndim.max = round(ncol(norm.mat)/2)
+      #     , center = TRUE
+      #     , scale = TRUE
+      #     , out.file = paste(c(paste0(de.dir, '/', cur.cond), 'assess', 'covariates', paste0('Top', vst_nsub), '02', 'regressed.svg'), collapse = '_')
+      #   ))
+      # }
     }
     
     ### PCAs for DESIGN covariates ====
@@ -1059,12 +1270,13 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
     if (any(!is.null(c(assess.factor, assess.conti)))) {
       test.mat <- SummarizedExperiment::assay(DE2obj.norm)
       test.dir <- paste0(de.dir, '/Test_covariates')
-      dir.create(test.dir)
+      # dir.create(test.dir)
       
       tmp.annot <- as.data.frame(SummarizedExperiment::colData(DE2obj))
+      
       ### plot PCA of normalized,unregressed data colored by TEST covariates
       Utest.dir <- paste0(test.dir, '/PCA_UNREGRESSED')
-      dir.create(path = Utest.dir)
+      dir.create(path = Utest.dir, recursive = TRUE)
       for (p in unique(c(cur.cond, assess.factor, assess.conti))) {
         pf <- paste0(Utest.dir, '/PCA_vst_UNREGRESSED_col.', p, '.svg')
         pw <- 1100
@@ -1076,100 +1288,296 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
       }
       
       Atest.dir <- paste0(test.dir, '/ASSESS_MAP')
-      dir.create(path = Atest.dir)
+      dir.create(path = Atest.dir, recursive = TRUE)
       
       ### Plotting UNREGRESSED assessment heatmap ====
-      try(assess_covar(mat = test.mat, annot.df = tmp.annot, factor.names = c(cur.cond, assess.factor), conti.names = assess.conti, red.method = 'pca', ndim.max = round(ncol(test.mat)/2), center = TRUE, scale = TRUE, out.file = paste0(Atest.dir, '/', cur.cond, '_TEST_covariates_01_unregressed.svg')))
+      ## All
+      try(assess_covar(
+        mat = test.mat
+        , annot.df = tmp.annot
+        , factor.names = c(cur.cond, assess.factor)
+        , conti.names = assess.conti
+        , red.method = 'pca'
+        , ndim.max = min(round(ncol(test.mat)/2), 20)
+        , center = TRUE
+        , scale = TRUE
+        , out.file = paste(c(paste0(Atest.dir, '/', cur.cond), 'TEST', 'covariates', 'All', '01', 'unregressed.svg'), collapse = '_')
+        ))
+      
+      ## Topvar
+      try(assess_covar(
+        mat = test.mat
+        , annot.df = tmp.annot
+        , factor.names = c(cur.cond, assess.factor)
+        , conti.names = assess.conti
+        , red.method = 'pca'
+        , topvar = vst_nsub
+        , ndim.max = min(round(ncol(test.mat)/2), 20)
+        , center = TRUE
+        , scale = TRUE
+        , out.file = paste(c(paste0(Atest.dir, '/', cur.cond), 'TEST', 'covariates', paste0('Topvar', vst_nsub), '01', 'unregressed.svg'), collapse = '_')
+      ))
       
       Rtest.dir <- paste0(test.dir, '/PCA_REGRESSED')
-      dir.create(path = Rtest.dir)
+      dir.create(path = Rtest.dir, recursive = TRUE)
       
       #### 1) Handling CONTINUOUS covariates
       for (cc in assess.conti) {
         message(paste0('ASSESS COVAR UNREGRESSED CONTI COVAR : ', cc))
         
-        #### Testing if design matrix is full-rank
+        #### 
         test.covariates <- tmp.annot[[cc]]
         if(all(!is.na(test.covariates))) {
-          test.design = model.matrix(as.formula(paste0('~0+', cur.cond)), data = DE2obj@colData)
-          test.covariates <- as.matrix(test.covariates)
-          test.designX = as.matrix(cbind(test.design, test.covariates))
-          ne <- limma::nonEstimable(test.designX)
-          rm(test.covariates, test.designX)
           
-          if(!is.null(ne)) {
-            message(paste(ne, collapse = ', '))
-            ## Matrix is NOT full-rank, NO regression !
-            message("Can't estimate ", cc, ' as design matrix is not full-rank !')
-            # print(paste0("Can't estimate ", cc, ' as design matrix is not full-rank !'))
-          } else {
-            ## Regressing the continuous covariate
-            ber.try <- try(tmp.mat <- limma::removeBatchEffect(x = test.mat, batch = NULL, batch2 = NULL, covariates = tmp.annot[[cc]], design = model.matrix(as.formula(paste0('~0+', cur.cond)), data = DE2obj.norm@colData)), silent = TRUE)
-            if (!is(ber.try, class2 = 'try-error')) {
-              ## Plotting REGRESSED assessment heatmap
-              try(assess_covar(mat = tmp.mat, annot.df = as.data.frame(DE2obj@colData), factor.names = c(cur.cond, assess.factor), conti.names = assess.conti, red.method = 'pca', ndim.max = round(ncol(tmp.mat)/2), center = TRUE, scale = TRUE, out.file = paste0(Atest.dir, '/', cur.cond, '_TEST_covariates_02_REGRESSED_', cc, '.svg')))
-              ### plot PCA of REGRESSED data colored by cur.cond
-              pf <- paste0(Rtest.dir, '/PCA_vst_REGRESSED.limma.', cc, '_col.', cur.cond, '.svg')
-              pw <- 1100
-              ph <- 1000
-              svg(filename = pf, width = pw/96, height = ph/96)
-              library(ggfortify)
-              try(print(ggplot2::autoplot(prcomp(t(tmp.mat)), data = as.data.frame(SummarizedExperiment::colData(DE2obj)), colour = cur.cond, size = 3)), silent = TRUE)
-              svg_off()
-            }
+          ber_mat <- try(
+            matrix_covar_regress(
+              mat = test.mat
+              , type = 'norm'
+              , covar_conti_df = as.data.frame(SummarizedExperiment::colData(DE2obj))[, cc, drop = FALSE]
+              , group = as.factor(SummarizedExperiment::colData(DE2obj)[[cur.cond]])
+            )
+            , silent = TRUE)
+          if (!is(ber_mat, class2 = 'try-error')) {
+            ## Plotting REGRESSED assessment heatmap
+            ## All
+            try(assess_covar(
+              mat = ber_mat
+              , annot.df = as.data.frame(DE2obj@colData)
+              , factor.names = c(cur.cond, assess.factor)
+              , conti.names = assess.conti
+              , red.method = 'pca'
+              , ndim.max = min(round(ncol(ber_mat)/2), 20)
+              , center = TRUE
+              , scale = TRUE
+              , out.file = paste0(paste(c(paste0(Atest.dir, '/', cur.cond), 'TEST', 'covariates', 'All', '02', 'REGRESSED', cc), collapse = '_'), '.svg')
+            ))
+            ## Topvar
+            try(assess_covar(
+              mat = ber_mat
+              , annot.df = as.data.frame(DE2obj@colData)
+              , factor.names = c(cur.cond, assess.factor)
+              , conti.names = assess.conti
+              , red.method = 'pca'
+              , topvar = vst_nsub
+              , ndim.max = min(round(ncol(ber_mat)/2), 20)
+              , center = TRUE
+              , scale = TRUE
+              , out.file = paste0(paste(c(paste0(Atest.dir, '/', cur.cond), 'TEST', 'covariates', paste0('Topvar', vst_nsub), '02', 'REGRESSED', cc), collapse = '_'), '.svg')
+            ))
+            ## PCA of REGRESSED data colored by cur.cond
+            pf <- paste0(Rtest.dir, '/PCA_vst_REGRESSED.limma.', cc, '_col.', cur.cond, '.svg')
+            pw <- 1100
+            ph <- 1000
+            svg(filename = pf, width = pw/96, height = ph/96)
+            library(ggfortify)
+            try(print(ggplot2::autoplot(prcomp(t(ber_mat)), data = as.data.frame(SummarizedExperiment::colData(DE2obj)), colour = cur.cond, size = 3)), silent = TRUE)
+            svg_off()
           }
         }
       }
       
       #### 2) Handling CATEGORICAL (FACTOR) covariates
       for (fc in assess.factor) {
-        message(paste0('ASSESS COVAR UNREGRESSED FACTOR COVAR : ', fc))
-        #### Testing if design matrix is full-rank
-        tmp.annot[[fc]] <- droplevels(tmp.annot[[fc]])
-        test.batch <- tmp.annot[[fc]]
-        test.design = model.matrix(as.formula(paste0('~0+', cur.cond)), data = DE2obj@colData)
-        test.batch <- as.factor(test.batch)
-        if(nlevels(test.batch) < 2) {
-          message("Can't estimate ", fc, ' as it only has one level !')
-          # print(paste0("Can't estimate ", fc, ' as it only has one level !'))
-        } else {
-          # contrasts(test.batch) <- contr.sum(levels(test.batch))
-          test.batch <- model.matrix(~test.batch)[, -1, drop = FALSE]
-          ## Handling NA batches
-          if (!nrow(test.batch) == nrow(test.design)) {
-            message("Can't estimate ", fc, " as it doesn't have the same size as the evaluated comparison (due to NAs) !")
+          
+        #### CombatSeq case
+        test.covariates <- tmp.annot[[fc]]
+        test.covariates <- droplevels(test.covariates)
+        if(all(!is.na(test.covariates))) {
+          if (min(table(test.covariates)) > 1) {
+            ber_mat <- try(
+              DESeq2::vst(
+                object = matrix_covar_regress(
+                  mat = SummarizedExperiment::assay(DE2obj)
+                  , type = 'counts'
+                  , covar_factor_df = as.data.frame(SummarizedExperiment::colData(DE2obj))[, fc, drop = FALSE]
+                  , group = as.factor(SummarizedExperiment::colData(DE2obj)[[cur.cond]])
+                )
+                , blind = TRUE
+                , nsub = vst_nsub
+              )
+              , silent = TRUE)
           } else {
-            # test.designX = as.matrix(cbind(test.design, test.batch))
-            ne <- limma::nonEstimable(test.design)
-            rm(test.batch, test.design)
-            
-            if(!is.null(ne)) {
-              message(paste(ne, collapse = ', '))
-              ## Matrix is NOT full-rank, NO regression !
-              message("Can't estimate ", fc, ' as design matrix is not full-rank !')
-              # print(paste0("Can't estimate ", fc, ' as design matrix is not full-rank !'))
-            } else {
-              ## Matrix is full-rank, one can regress !
-              ## Regressing
-              # ber.try <- try(tmp.mat <- limma::removeBatchEffect(x = test.mat, batch = tmp.annot[[fc]], batch2 = NULL, covariates = NULL, design = model.matrix(as.formula(paste0('~0+', cur.cond)), data = tmp.annot)), silent = TRUE)
-              
-              ber.try <- try(tmp.mat <- sva::ComBat(dat = test.mat, batch = tmp.annot[[fc]], mod = model.matrix(as.formula(paste0('~', cur.cond)), data = SummarizedExperiment::colData(DE2obj)), BPPARAM = BPPARAM), silent = TRUE)
-              if (!is(ber.try, class2 = 'try-error')) {
-                ## Plotting REGRESSED assessment heatmap
-                try(assess_covar(mat = tmp.mat, annot.df = tmp.annot, factor.names = c(cur.cond, assess.factor), conti.names = assess.conti, red.method = 'pca', ndim.max = round(ncol(tmp.mat)/2), center = TRUE, scale = TRUE, out.file = paste0(Atest.dir, '/', cur.cond, '_TEST_covariates_02_REGRESSED_', fc, '.svg')))
-                ### plot PCA of REGRESSED data colored by cur.cond
-                pf <- paste0(Rtest.dir, '/PCA_vst_REGRESSED.limma.', fc, '_col.', cur.cond, '.svg')
-                pw <- 1100
-                ph <- 1000
-                svg(filename = pf, width = pw/96, height = ph/96)
-                library(ggfortify)
-                try(print(ggplot2::autoplot(prcomp(t(tmp.mat)), data = tmp.annot, colour = cur.cond, size = 3)), silent = TRUE)
-                svg_off()
-              }
-            }
+            ber_mat <- try(
+              matrix_covar_regress(
+                mat = test.mat
+                , type = 'norm'
+                , covar_factor_df = as.data.frame(SummarizedExperiment::colData(DE2obj))[, fc, drop = FALSE]
+                , group = as.factor(SummarizedExperiment::colData(DE2obj)[[cur.cond]])
+              )
+              , silent = TRUE)
           }
+          if (!is(ber_mat, class2 = 'try-error')) {
+            ## Plotting REGRESSED assessment heatmap
+            ## All
+            try(assess_covar(
+              mat = ber_mat
+              , annot.df = as.data.frame(DE2obj@colData)
+              , factor.names = c(cur.cond, assess.factor)
+              , conti.names = assess.conti
+              , red.method = 'pca'
+              , ndim.max = min(round(ncol(ber_mat)/2), 20)
+              , center = TRUE
+              , scale = TRUE
+              , out.file = paste0(paste(c(paste0(Atest.dir, '/', cur.cond), 'TEST', 'covariates', 'All', '02', 'REGRESSED', fc), collapse = '_'), '.svg')
+            ))
+            ## Topvar
+            try(assess_covar(
+              mat = ber_mat
+              , annot.df = as.data.frame(DE2obj@colData)
+              , factor.names = c(cur.cond, assess.factor)
+              , conti.names = assess.conti
+              , red.method = 'pca'
+              , topvar = vst_nsub
+              , ndim.max = min(round(ncol(ber_mat)/2), 20)
+              , center = TRUE
+              , scale = TRUE
+              , out.file = paste0(paste(c(paste0(Atest.dir, '/', cur.cond), 'TEST', 'covariates', paste0('Topvar', vst_nsub), '02', 'REGRESSED', fc), collapse = '_'), '.svg')
+            ))
+            
+            ### plot PCA of REGRESSED data colored by cur.cond
+            pf <- paste0(Rtest.dir, '/PCA_vst_REGRESSED.limma.', fc, '_col.', cur.cond, '.svg')
+            pw <- 1100
+            ph <- 1000
+            svg(filename = pf, width = pw/96, height = ph/96)
+            library(ggfortify)
+            try(print(ggplot2::autoplot(prcomp(t(ber_mat)), data = tmp.annot, colour = cur.cond, size = 3)), silent = TRUE)
+            svg_off()
+          } else (message('FAIL2!'))
         }
       }
+          
+        ################################""
+          
+      #   #### Testing if design matrix is full-rank
+      #   test.covariates <- tmp.annot[[cc]]
+      #   if(all(!is.na(test.covariates))) {
+      #     test.design = model.matrix(as.formula(paste0('~0+', cur.cond)), data = DE2obj@colData)
+      #     test.covariates <- as.matrix(test.covariates)
+      #     test.designX = as.matrix(cbind(test.design, test.covariates))
+      #     ne <- limma::nonEstimable(test.designX)
+      #     rm(test.covariates, test.designX)
+      #     
+      #     if(!is.null(ne)) {
+      #       message(paste(ne, collapse = ', '))
+      #       ## Matrix is NOT full-rank, NO regression !
+      #       message("Can't estimate ", cc, ' as design matrix is not full-rank !')
+      #       # print(paste0("Can't estimate ", cc, ' as design matrix is not full-rank !'))
+      #     } else {
+      #       ## Regressing the continuous covariate
+      #       ber.try <- try(tmp.mat <- limma::removeBatchEffect(x = test.mat, batch = NULL, batch2 = NULL, covariates = tmp.annot[[cc]], design = model.matrix(as.formula(paste0('~0+', cur.cond)), data = DE2obj.norm@colData)), silent = TRUE)
+      #       if (!is(ber.try, class2 = 'try-error')) {
+      #         ## Plotting REGRESSED assessment heatmap
+      #         ## All
+      #         try(assess_covar(
+      #           mat = tmp.mat
+      #           , annot.df = as.data.frame(DE2obj@colData)
+      #           , factor.names = c(cur.cond, assess.factor)
+      #           , conti.names = assess.conti
+      #           , red.method = 'pca'
+      #           , ndim.max = round(ncol(tmp.mat)/2)
+      #           , center = TRUE
+      #           , scale = TRUE
+      #           , out.file = paste0(paste(c(paste0(Atest.dir, '/', cur.cond), 'TEST', 'covariates', 'All', '02', 'REGRESSED', cc), collapse = '_'), '.svg')
+      #           ))
+      #         ## Topvar
+      #         try(assess_covar(
+      #           mat = tmp.mat
+      #           , annot.df = as.data.frame(DE2obj@colData)
+      #           , factor.names = c(cur.cond, assess.factor)
+      #           , conti.names = assess.conti
+      #           , red.method = 'pca'
+      #           , topvar = vst_nsub
+      #           , ndim.max = round(ncol(tmp.mat)/2)
+      #           , center = TRUE
+      #           , scale = TRUE
+      #           , out.file = paste0(paste(c(paste0(Atest.dir, '/', cur.cond), 'TEST', 'covariates', paste0('Topvar', vst_nsub), '02', 'REGRESSED', cc), collapse = '_'), '.svg')
+      #         ))
+      #         ### plot PCA of REGRESSED data colored by cur.cond
+      #         pf <- paste0(Rtest.dir, '/PCA_vst_REGRESSED.limma.', cc, '_col.', cur.cond, '.svg')
+      #         pw <- 1100
+      #         ph <- 1000
+      #         svg(filename = pf, width = pw/96, height = ph/96)
+      #         library(ggfortify)
+      #         try(print(ggplot2::autoplot(prcomp(t(tmp.mat)), data = as.data.frame(SummarizedExperiment::colData(DE2obj)), colour = cur.cond, size = 3)), silent = TRUE)
+      #         svg_off()
+      #       }
+      #     }
+      #   }
+      # }
+      # 
+      # #### 2) Handling CATEGORICAL (FACTOR) covariates
+      # for (fc in assess.factor) {
+      #   message(paste0('ASSESS COVAR UNREGRESSED FACTOR COVAR : ', fc))
+      #   #### Testing if design matrix is full-rank
+      #   tmp.annot[[fc]] <- droplevels(tmp.annot[[fc]])
+      #   test.batch <- tmp.annot[[fc]]
+      #   test.design = model.matrix(as.formula(paste0('~0+', cur.cond)), data = DE2obj@colData)
+      #   test.batch <- as.factor(test.batch)
+      #   if(nlevels(test.batch) < 2) {
+      #     message("Can't estimate ", fc, ' as it only has one level !')
+      #     # print(paste0("Can't estimate ", fc, ' as it only has one level !'))
+      #   } else {
+      #     # contrasts(test.batch) <- contr.sum(levels(test.batch))
+      #     test.batch <- model.matrix(~test.batch)[, -1, drop = FALSE]
+      #     ## Handling NA batches
+      #     if (!nrow(test.batch) == nrow(test.design)) {
+      #       message("Can't estimate ", fc, " as it doesn't have the same size as the evaluated comparison (due to NAs) !")
+      #     } else {
+      #       # test.designX = as.matrix(cbind(test.design, test.batch))
+      #       ne <- limma::nonEstimable(test.design)
+      #       rm(test.batch, test.design)
+      #       
+      #       if(!is.null(ne)) {
+      #         message(paste(ne, collapse = ', '))
+      #         ## Matrix is NOT full-rank, NO regression !
+      #         message("Can't estimate ", fc, ' as design matrix is not full-rank !')
+      #         # print(paste0("Can't estimate ", fc, ' as design matrix is not full-rank !'))
+      #       } else {
+      #         ## Matrix is full-rank, one can regress !
+      #         ## Regressing
+      #         # ber.try <- try(tmp.mat <- limma::removeBatchEffect(x = test.mat, batch = tmp.annot[[fc]], batch2 = NULL, covariates = NULL, design = model.matrix(as.formula(paste0('~0+', cur.cond)), data = tmp.annot)), silent = TRUE)
+      #         
+      #         ber.try <- try(tmp.mat <- sva::ComBat(dat = test.mat, batch = tmp.annot[[fc]], mod = model.matrix(as.formula(paste0('~', cur.cond)), data = SummarizedExperiment::colData(DE2obj)), BPPARAM = BPPARAM), silent = TRUE)
+      #         if (!is(ber.try, class2 = 'try-error')) {
+      #           ## Plotting REGRESSED assessment heatmap
+      #           ## All
+      #           try(assess_covar(
+      #             mat = tmp.mat
+      #             , annot.df = tmp.annot
+      #             , factor.names = c(cur.cond, assess.factor)
+      #             , conti.names = assess.conti
+      #             , red.method = 'pca'
+      #             , ndim.max = round(ncol(tmp.mat)/2)
+      #             , center = TRUE
+      #             , scale = TRUE
+      #             , out.file = paste0(paste(c(paste0(Atest.dir, '/', cur.cond), 'TEST', 'covariates', 'All', '02', 'REGRESSED', fc), collapse = '_'), '.svg')
+      #             ))
+      #           ## Topvar
+      #           try(assess_covar(
+      #             mat = tmp.mat
+      #             , annot.df = tmp.annot
+      #             , factor.names = c(cur.cond, assess.factor)
+      #             , conti.names = assess.conti
+      #             , red.method = 'pca'
+      #             , topvar = vst_nsub
+      #             , ndim.max = round(ncol(tmp.mat)/2)
+      #             , center = TRUE
+      #             , scale = TRUE
+      #             , out.file = paste0(paste(c(paste0(Atest.dir, '/', cur.cond), 'TEST', 'covariates', paste0('Topvar', vst_nsub), '02', 'REGRESSED', fc), collapse = '_'), '.svg')
+      #           ))
+      #           ### plot PCA of REGRESSED data colored by cur.cond
+      #           pf <- paste0(Rtest.dir, '/PCA_vst_REGRESSED.limma.', fc, '_col.', cur.cond, '.svg')
+      #           pw <- 1100
+      #           ph <- 1000
+      #           svg(filename = pf, width = pw/96, height = ph/96)
+      #           library(ggfortify)
+      #           try(print(ggplot2::autoplot(prcomp(t(tmp.mat)), data = tmp.annot, colour = cur.cond, size = 3)), silent = TRUE)
+      #           svg_off()
+      #         }
+      #       }
+      #     }
+      #   }
+      # }
     }
     
     ## Remove temporary VST object
@@ -1338,8 +1746,18 @@ DEA_run <- function(exp.mat = NULL, annot.df = NULL, design.df = NULL, assess.fa
               svg(filename = paste0(pf_root, '.heatmap.svg'), width = pw/96, height = ph/96)
               ComplexHeatmap::draw(myHM)
               svg_off()
+              ## Save genes/samples clustering results
+              ### Samples
               saveRDS(object = hc.s, file = paste0(pf_root, '.samples.hclust.rds'))
+              cut_s <- cbind(Sample = hc.s$labels, as.data.frame(lapply(seq_along(hc.s$labels), function(k) as.factor(unname(stats::cutree(tree = hc.s, k = k))))))
+              colnames(cut_s) <- c('Sample', paste0('cut.', seq_along(hc.s$labels)))
+              WriteXLS::WriteXLS(x = cut_s, ExcelFileName = paste0(pf_root, '.samples.hclust.cutree.xlsx'), SheetNames = 'Hclust.cut', AdjWidth = TRUE, BoldHeaderRow = TRUE, FreezeRow = 1, FreezeCol = 1)
+              ### Genes
               saveRDS(object = hc.g, file = paste0(pf_root, '.genes.hclust.rds'))
+              cut_g <- cbind(Sample = hc.g$labels, as.data.frame(lapply(seq_along(hc.g$labels), function(k) as.factor(unname(stats::cutree(tree = hc.g, k = k))))))
+              colnames(cut_g) <- c('Gene', paste0('cut.', seq_along(hc.g$labels)))
+              WriteXLS::WriteXLS(x = cut_g, ExcelFileName = paste0(pf_root, '.genes.hclust.cutree.xlsx'), SheetNames = 'Hclust.cut', AdjWidth = TRUE, BoldHeaderRow = TRUE, FreezeRow = 1, FreezeCol = 1)
+              
             }
           }
         }
@@ -1943,7 +2361,7 @@ immunedeconv_run <- function(exp_mat = NULL, to_tpm = TRUE, methods = c('quantis
 
 
 ## Perform GSVA on a symbols x samples normalized expression matrix ====
-gsva_run <- function(exp_mat = NULL, gmt_files = NULL, enr_min_genes = 10, species = 'homo sapiens', out_dir = getwd()) {
+  gsva_run <- function(exp_mat = NULL, gmt_files = NULL, enr_min_genes = 10, species = 'homo sapiens', out_dir = getwd()) {
   ## Checks
   if (is.null(exp_mat)) stop('An expression matrix is required !')
   if (is.null(gmt_files)) stop('No GMT provided !')
@@ -1971,7 +2389,7 @@ gsva_run <- function(exp_mat = NULL, gmt_files = NULL, enr_min_genes = 10, speci
   g_conv <- g_conv[!(duplicated(g_conv$SYMBOL) | duplicated(g_conv$ENTREZID)),]
   s2e <- setNames(object = g_conv$ENTREZID, nm = g_conv$SYMBOL)
   rm(g_conv)
-  geo_gsva <- exp_mat[rownames(geo_norm) %in% names(s2e),]
+  geo_gsva <- exp_mat[rownames(exp_mat) %in% names(s2e),]
   rownames(geo_gsva) <- s2e[rownames(geo_gsva)]
   rm(s2e, exp_mat)
   
@@ -1988,30 +2406,38 @@ gsva_run <- function(exp_mat = NULL, gmt_files = NULL, enr_min_genes = 10, speci
     ## Create gParam from expression matrix and terms
     g_param <- suppressWarnings(suppressMessages(GSVA::gsvaParam(exprData = geo_gsva, geneSets = gmt_db, kcdf = 'Gaussian', minSize = enr_min_genes)))
     ## Run GSVA
-    gsva_res <- suppressWarnings(suppressMessages(GSVA::gsva(expr = g_param, verbose = FALSE)))
+    gsva_res <- suppressWarnings(suppressMessages(GSVA::gsva(param = g_param, verbose = FALSE)))
     
     ### OL detection : grDevices::boxplot.stats
-    bx_res <- lapply(seq_len(ncol(gsva_res)), function(k) {
-      es_data <- gsva_res[,k, drop = TRUE]
-      es_res <- boxplot.stats(x = es_data)
-      es_data[!names(es_data) %in% names(es_res$out)] <- NA
-      return(es_data)
-    })
-    bx_mat <- Reduce(f = cbind, x = bx_res)
-    dimnames(bx_mat) <- dimnames(gsva_res)
+    if(nrow(gsva_res)>=3) {
+      bx_res <- lapply(seq_len(ncol(gsva_res)), function(k) {
+        es_data <- gsva_res[,k, drop = TRUE]
+        es_res <- grDevices::boxplot.stats(x = es_data)
+        es_data[!names(es_data) %in% names(es_res$out)] <- NA
+        return(es_data)
+      })
+      bx_mat <- Reduce(f = cbind, x = bx_res)
+      dimnames(bx_mat) <- dimnames(gsva_res)
+    } else {
+      bx_mat <- matrix(NA, nrow = nrow(gsva_res), ncol = ncol(gsva_res), dimnames = dimnames(gsva_res))
+    }
     bx_df <- data.frame(data.frame(Term = gsub(pattern = '\\%', replacement = '_', x = rownames(bx_mat)), bx_mat, OCC = ncol(bx_mat) - matrixStats::rowCounts(x = bx_mat, value = NA, na.rm = FALSE)))
     bx_df$FREQ <- bx_df$OCC / ncol(bx_mat)
     rm(bx_mat)
     
     ## OL detection : Rosner test
-    ro_res <- lapply(seq_len(ncol(gsva_res)), function(k) {
-      es_data <- gsva_res[,k, drop = TRUE]
-      es_res <- EnvStats::rosnerTest(x = es_data, k = ceiling(length(es_data)/2), warn = FALSE)
-      es_data[es_res$all.stats$Outlier == FALSE] <- NA
-      return(es_data)
-    })
-    ro_mat <- Reduce(f = cbind, x = ro_res)
-    dimnames(ro_mat) <- dimnames(gsva_res)
+    if(nrow(gsva_res)>=3) {
+      ro_res <- lapply(seq_len(ncol(gsva_res)), function(k) {
+        es_data <- gsva_res[,k, drop = TRUE]
+        es_res <- EnvStats::rosnerTest(x = es_data, k = ceiling(length(es_data)/2), warn = FALSE)
+        es_data[es_res$all.stats$Outlier == FALSE] <- NA
+        return(es_data)
+      })
+      ro_mat <- Reduce(f = cbind, x = ro_res)
+      dimnames(ro_mat) <- dimnames(gsva_res)
+    } else {
+      ro_mat <- matrix(NA, nrow = nrow(gsva_res), ncol = ncol(gsva_res), dimnames = dimnames(gsva_res))
+    }
     ro_df <- data.frame(data.frame(Term = gsub(pattern = '\\%', replacement = '_', rownames(ro_mat)), ro_mat, OCC = ncol(ro_mat) - matrixStats::rowCounts(x = ro_mat, value = NA, na.rm = FALSE)))
     ro_df$FREQ <- ro_df$OCC / ncol(ro_mat)
     rm(ro_mat)
@@ -2062,22 +2488,25 @@ gsva_run <- function(exp_mat = NULL, gmt_files = NULL, enr_min_genes = 10, speci
 
 
 ## Perform Kruskal-Wallis differential test on GSVA results according to clinical annotation ====
-gsva_diff_run <- function(gsva_res = NULL, annot_df = NULL, diff_factor = NULL, max.p = .05, out_dir = getwd()) {
+gsva_diff_run <- function(gsva_res = NULL, annot_df = NULL, method = 'KW', paired = FALSE, diff_factor = NULL, max.p = .05, out_dir = getwd()) {
   
   ## Checks
   if (is.null(gsva_res)) stop('An output of gsva_run() is required !')
   if (!is.list(gsva_res)) stop('gsva_res should be a list, the output of gsea_run() !')
   if (is.null(diff_factor)) stop('A list of annotation to perform the differential tests is required !')
-  # if (!is.list(diff_factor)) stop('diff_factor should be a list !')
+  if (!tolower(method) %in% c('kw', 'w')) stop('Only KW (Kruskal-Wallis) or W (Wilcoxon) statistical methods are allowed !')
+  if (!is.logical(paired)) stop('paired should be a logical !')
   if (is.null(annot_df)) stop('No annotation table provided !')
   if (!is.numeric(max.p)) stop('max_p should be a numeric in ]0:1] !')
   if (max.p <= 0) stop('max_p should be a numeric in ]0:1] !')
   if (max.p > 1) stop('max_p should be a numeric in ]0:1] !')
   if (!dir.exists(paths = out_dir)) stop('Provided out_dir does not exist !')
+  if (paired) message('Using paired mode ...')
+  if ((tolower(method) %in% 'kw') & paired) warning('Paired testing is active but KW is requested, so paired is ignored !')
   
   ## Run
   ## Looping on factors to compare
-  grd_all <- lapply(prop_factors, function(ppf) {
+  grd_all <- lapply(diff_factor, function(ppf) {
     message('. ', ppf)
     ## Looping on gsva results
     grdiff_all <- lapply(names(gsva_all), function(ga) {
@@ -2085,9 +2514,16 @@ gsva_diff_run <- function(gsva_res = NULL, annot_df = NULL, diff_factor = NULL, 
       ## Looping on terms
       kw_l <- sapply(seq_len(nrow(gsva_all[[ga]])), function(x) {
         # message(x)
-        data_df <- data.frame(gsva = unname(unlist(gsva_all[[ga]][x,])), class = annot_df[[ppf]])
-        kw_t <- kruskal.test(gsva ~ class, data = data_df)
-        kw_df <- data.frame(Statistic = kw_t$statistic, raw.p = kw_t$p.value, adj.p = 0.0)
+        data_df <- data.frame(gsva = unname(unlist(gsva_all[[ga]][x,])), class = as.factor(annot_df[[ppf]]))
+        ## KW test
+        if (tolower(method) %in% 'kw') {
+          kw_t <- kruskal.test(gsva ~ class, data = data_df)
+          kw_df <- data.frame(Statistic = kw_t$statistic, raw.p = kw_t$p.value, adj.p = 0.0)
+        } else if (tolower(method) %in% 'w') {
+          # kw_t <- wilcox.test(gsva ~ class, data = data_df, paired = paired)
+          kw_t <- wilcox.test(x = data_df$gsva[data_df$class == levels(data_df$class)[2]], y = data_df$gsva[data_df$class == levels(data_df$class)[1]], paired = paired)
+          kw_df <- data.frame(Statistic = kw_t$statistic, raw.p = kw_t$p.value, adj.p = 0.0)
+        } 
         ## Add classes median
         ksumry <- aggregate(gsva ~ class, data = data_df, summary)
         ksd <- aggregate(gsva ~ class, data = data_df, sd)
@@ -2105,6 +2541,9 @@ gsva_diff_run <- function(gsva_res = NULL, annot_df = NULL, diff_factor = NULL, 
     
     ## Add AdjP
     for (l in names(grdiff_all)) grdiff_all[[l]]$adj.p <- p.adjust(p = grdiff_all[[l]]$raw.p, method = "BH")
+    
+    ## Sort by AdjP, Rawp
+    for (l in names(grdiff_all)) grdiff_all[[l]] <- grdiff_all[[l]][order(grdiff_all[[l]]$adj.p, grdiff_all[[l]]$raw.p), ]
     
     ## Output results
     Hstyle <- openxlsx::createStyle(halign = 'center', valign = 'center', textDecoration = 'bold')
@@ -2127,11 +2566,12 @@ gsva_diff_run <- function(gsva_res = NULL, annot_df = NULL, diff_factor = NULL, 
       openxlsx::writeData(wb = wb, sheet = sname, x = grdiff_all[[l]], keepNA = TRUE, na.string = 'NA')
     }
     ## Save XLSX
-    openxlsx::saveWorkbook(wb = wb, file = paste0(out_dir, '/', ppf, '_GSVA_DiffTest.KW_results.xlsx'), overwrite = TRUE)
+    pairedword <- if(paired) '.paired' else NULL
+    openxlsx::saveWorkbook(wb = wb, file = paste0(out_dir, '/', ppf, '_GSVA_DiffTest.', method, pairedword, '_results.xlsx'), overwrite = TRUE)
     rm(wb)
     return(grdiff_all)
   })
-  names(grd_all) <- unlist(prop_factors)
+  names(grd_all) <- unlist(diff_factor)
   return(grd_all)
 }
 
@@ -2565,7 +3005,7 @@ ora_output <- function(enrichResult = NULL, comp.name = 'TEST', out.dir = getwd(
       ## Cnetplot (need readable)
       p <- try(enrichplot::cnetplot(enrichResult_readable, showCategory = cnetplot, circular = FALSE, colorEdge = TRUE), silent = TRUE)
       if(!is(p, class2 = 'try-error')) {
-        pf <- paste0(ora.dir, '/GSEA.cnetplot_', cnetplot, '.svg')
+        pf <- paste0(ora.dir, '/ORA.cnetplot_', cnetplot, '.svg')
         ph <- 2000
         pw <- 2000
         svg(filename = pf, width = pw/96, height = ph/96)
@@ -2579,7 +3019,7 @@ ora_output <- function(enrichResult = NULL, comp.name = 'TEST', out.dir = getwd(
       ## Emapplot (need readable)
       p <- try(enrichplot::emapplot(enrichplot::pairwise_termsim(enrichResult_readable, showCategory = emapplot), showCategory = emapplot, layout = 'kk'), silent = TRUE)
       if(!is(p, class2 = 'try-error')) {
-        pf <- paste0(ora.dir, '/GSEA.emapplot_', emapplot, '.svg')
+        pf <- paste0(ora.dir, '/ORA.emapplot_', emapplot, '.svg')
         ph <- 2000
         pw <- 2000
         svg(filename = pf, width = pw/96, height = ph/96)
@@ -2598,8 +3038,11 @@ ora_output <- function(enrichResult = NULL, comp.name = 'TEST', out.dir = getwd(
 
 ## Aggregate different metrics from multiple DE_run() results ====
 ### . 'dea_path' :  char;     Path to one or multiple DEA_res output(s).
-### . 'legacy' :    logical;  If TRUE, the function will search for results formatted as TSV. If FALSE, will search for XLSX.
-dea_aggregator <- function(dea_path = getwd(), dea_legacy = FALSE, gsea_legacy = FALSE) {
+### . 'summarize' : logical;  If TRUE, returns an aggregated data.frame. If FALSE, a list
+### . 'dea_legacy' :    logical;  If TRUE, the function will search for DEA results formatted as TSV. If FALSE, will search for XLSX.
+### . 'gsea_legacy' :    logical;  If TRUE, the function will search for GSEA/ORA results formatted as TSV. If FALSE, will search for XLSX.
+
+dea_aggregator <- function(dea_path = getwd(), summarize = TRUE, dea_legacy = FALSE, gsea_legacy = FALSE) {
   ## Checks
   if(!dir.exists(dea_path)) stop('A directory containing DEA_run() results is required !')
   ## Get input files
@@ -2624,9 +3067,9 @@ dea_aggregator <- function(dea_path = getwd(), dea_legacy = FALSE, gsea_legacy =
     nsig <- length(which(res_df[,ncol(res_df)] == 1))
     ## Get GSEA results
     if(gsea_legacy) {
-      gsea_files <- list.files(path = dirname(res_f), pattern = 'GSEA.results_readable.tsv', full.names = TRUE, recursive = TRUE)
+      gsea_files <- list.files(path = dirname(res_files[rf]), pattern = 'GSEA.results_readable.tsv', full.names = TRUE, recursive = TRUE)
     } else {
-      gsea_files <- list.files(path = dirname(res_f), pattern = 'GSEA.results_readable.xlsx', full.names = TRUE, recursive = TRUE)
+      gsea_files <- list.files(path = dirname(res_files[rf]), pattern = 'GSEA.results_readable.xlsx', full.names = TRUE, recursive = TRUE)
     }
     ## Loop on GSEA files
     gsea_agg <- lapply(seq_along(gsea_files), function(gf) {
@@ -2645,9 +3088,9 @@ dea_aggregator <- function(dea_path = getwd(), dea_legacy = FALSE, gsea_legacy =
     }, 'a')
     ## Get ORA results
     if(gsea_legacy) {
-      ora_files <- list.files(path = dirname(res_f), pattern = 'ORA.results_readable.tsv', full.names = TRUE, recursive = TRUE)
+      ora_files <- list.files(path = dirname(res_files[rf]), pattern = 'ORA.results_readable.tsv', full.names = TRUE, recursive = TRUE)
     } else {
-      ora_files <- list.files(path = dirname(res_f), pattern = 'ORA.results_readable.xlsx', full.names = TRUE, recursive = TRUE)
+      ora_files <- list.files(path = dirname(res_files[rf]), pattern = 'ORA.results_readable.xlsx', full.names = TRUE, recursive = TRUE)
     }
     ## Loop on ORA files
     ora_agg <- lapply(seq_along(ora_files), function(of) {
@@ -2655,7 +3098,7 @@ dea_aggregator <- function(dea_path = getwd(), dea_legacy = FALSE, gsea_legacy =
       if (gsea_legacy) {
         ores_df <- read.table(file = ora_files[of], header = TRUE, sep = '\t', as.is = TRUE)
       } else {
-        ores_df <- as.data.frame(readxl::read_excel(path = oraa_files[of], sheet = 1, na = c(NA, 'NA', '')))
+        ores_df <- as.data.frame(readxl::read_excel(path = ora_files[of], sheet = 1, na = c(NA, 'NA', '')))
       }
       return(nrow(ores_df))
     })
@@ -2666,10 +3109,45 @@ dea_aggregator <- function(dea_path = getwd(), dea_legacy = FALSE, gsea_legacy =
     }, 'a')
     
     ## OUTPUT
-    out_df <- data.frame(Path = dirname(res_f), Formula = split_dir[2], Comparison = split_dir[1], Sig_params = split_dir[3], Sig_features = nsig)
+    # out_df <- data.frame(Path = dirname(res_files[rf]), Formula = split_dir[2], Comparison = split_dir[1], Sig_params = split_dir[3], Sig_features = nsig)
+    out_df <- data.frame(Path = dirname(res_files[rf]), Formula = split_dir[3], Comparison = split_dir[2], Sig_params = split_dir[1], Sig_features = nsig)
     out_df
-    return(list(out_df, gsea_agg, ora_agg))
+    return(list(DEA = out_df, GSEA = gsea_agg, ORA = ora_agg))
   })
+  
+  ## Summarize ?
+  if(summarize) {
+    message('Summarizing ...')
+    ## DEA level
+    dea_agg <- Reduce(f = rbind, x = lapply(seq_along(dres), function(x) { dres[[x]]$DEA }))
+    sum_agg <- dea_agg
+    ## GSEA_level {
+    gsea_allbanks <- sort(unique(unlist(lapply(seq_along(dres), function(x) { names(dres[[x]]$GSEA) }))))
+    if(length(gsea_allbanks) > 0) {
+      gsea_agg <- matrix(0, nrow = length(dres), ncol = length(gsea_allbanks), dimnames = list(seq_along(dres), gsea_allbanks))
+      for (x in seq_len(nrow(gsea_agg))) {
+        for (bank in colnames(gsea_agg)) {
+          if(bank %in% names(dres[[x]]$GSEA)) gsea_agg[x, bank] <- dres[[x]]$GSEA[[bank]]
+        }
+      }
+      colnames(gsea_agg) <- paste0('GSEA_', colnames(gsea_agg))
+      sum_agg <- cbind(sum_agg, gsea_agg)
+    }
+    ## ORA_level {
+    ora_allbanks <- sort(unique(unlist(lapply(seq_along(dres), function(x) { names(dres[[x]]$ORA) }))))
+    if(length(ora_allbanks) > 0) {
+      ora_agg <- matrix(0, nrow = length(dres), ncol = length(ora_allbanks), dimnames = list(seq_along(dres), ora_allbanks))
+      for (x in seq_len(nrow(ora_agg))) {
+        for (bank in colnames(ora_agg)) {
+          if(bank %in% names(dres[[x]]$ORA)) ora_agg[x, bank] <- dres[[x]]$ORA[[bank]]
+        }
+      }
+      colnames(ora_agg) <- paste0('ORA_', colnames(ora_agg))
+      sum_agg <- cbind(sum_agg, ora_agg)
+    }
+  } else {
+    return(dea_agg)
+  }
 }
 
 
