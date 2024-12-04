@@ -1,3 +1,55 @@
+## Packages test version (R 4.4.1)
+## -PACKAGE-              -LOCAL-       -MAMBA-
+## amap                   0.8-19.1      0.8_14
+## arrayQualityMetrics    3.60.0        3.58.0
+## AnnotationDbi          1.66.0        1.64.1
+## Biobase                2.64.0        2.62.2
+## circlize               0.4.16        0.4.16
+## clusterProfiler        4.12.6        4.10.0
+## coop                   0.6-3         0.6_3
+## ComplexHeatmap         2.20.0        2.18.0
+## data.table             1.16.2        1.15.4
+## dplyr                  1.1.4         1.1.4
+## DESeq2                 1.44.0        1.42.0
+## DOSE                   3.30.5        3.28.1
+## enrichplot             1.24.4        1.22.0
+## EnrichmentBrowser      2.34.1        2.32.0
+## EnvStats               3.0.0         3.0.0
+## fgsea                  1.30.0        1.28.0
+## ggplot2                3.5.1         3.5.1
+## glmmSeq                0.5.5         (https://cran.rstudio.com/web/packages/glmmSeq/index.html)
+## GO.db                  3.19.1        3.18.0
+## GSEABase               1.66.0        1.64.0
+## GSVA                   1.52.3        1.50.0
+## HDO.db                 0.99.1        0.99.1
+## HPO.db                 0.99.2        0.99.2
+## immunedeconv           2.1.3*        2.1.2
+## IHW                    1.32.0        1.28.0
+## limma                  3.60.6        3.58.1
+## matrixStats            1.4.1         1.4.1
+## msigdbr                7.5.1         7.5.1
+## openxlsx               4.2.7.1       4.2.7.1
+## org.Hs.eg.db           3.19.1        3.18.0
+## pathview               1.44.0        1.42.0
+## purrr                  1.0.2         1.0.2
+## randomcoloR            1.1.0.1       1.1.0.1
+## reactome.db            1.88.0        1.86.2
+## remotes                2.5.0         2.5.0
+## rsvg                   2.6.1         2.6.1
+## ReactomePA             1.48.0        1.46.0
+## RColorBrewer           1.1-3         1.1_3
+## R.utils                2.12.3        2.12.3
+## stringr                1.5.1         1.5.1
+## sva                    3.52.0        3.50.0
+## SummarizedExperiment   1.34.0        1.32.0
+## tibble                 3.2.1         3.2.1
+## tidyr                  1.3.1         1.3.1
+## writexl                1.5.1         1.5.1
+## WriteXLS               6.7.0         6.7.0
+##
+## * actually displays in R as 2.1.0 (bad DESCRIPTION)...
+
+
 #..............#
 #### HEADER ####
 #..............#
@@ -270,6 +322,77 @@ immunedeconv_barplot <- function(id_res = NULL, title = 'ImmuneDeconv') {
   id_plot <- ggplot2::ggplot(data = id_plotdata, mapping = ggplot2::aes(x = sample, y = fraction, fill = cell_type)) + ggplot2::geom_bar(stat = "identity") + ggplot2::coord_flip() + ggplot2::scale_fill_manual(values = colorRampPalette(RColorBrewer::brewer.pal(name = "Set1", n = 8))(nrow(id_res))) + ggplot2::scale_x_discrete(limits = rev(levels(id_res))) + ggplot2::ggtitle(title)
   print(id_plot)
 }
+
+## Custom GSEA dotplot from a merge of multiple gseaResults in a list to a single custom dot-plot drawn with ggplot2/grid ====
+### gsea_res_list     list()    A list of gseaResults
+### title             char      The plot title to display
+### intersection      logical   Only show the intersection of the terms in the list (ie, only term present in ALL entries of the list)
+### fill              logical   Force the display all categories from the list entries * sign (Activated/Suppressed) even if some are not present (will display an empty dotplot for missing ones)
+### plot              logical   Draw the plot
+### return_object     logical   Return the ggplot object
+gsea_merge_dotplot <- function(gsea_res_list = NULL, title = "DotPlot", intersection = FALSE, fill = FALSE, plot = TRUE, return_object = FALSE) {
+  
+  ## Checks
+  if(is.null(gsea_res_list)) stop("A list of gseaResults is required !")
+  if(!is.char(title)) stop("Title should be character !")
+  if(!anyc(plot, return_object)) {
+    warning("No plot drawing nor return requested : nothing to do !")
+    return()
+  }
+  
+  ## Merge results
+  fgsea_merged <- clusterProfiler::merge_result(enrichResultList = gsea_res_list)
+  ## Corrected generatio
+  dot_df <- fgsea_merged@compareClusterResult
+  
+  ## Handle intersection case
+  if(intersection) {
+    intertab <- as.data.frame(table(dot_df$ID))
+    interok <- intertab$Freq == length(gsea_res_list)
+    if (length(which(interok)) == 0) stop("No intersection !")
+    dot_df <- dot_df[dot_df$ID %in% intertab$Var1[interok],]
+  }
+  
+  dot_df$gene_count <- stringr::str_count(dot_df$core_enrichment, "/")
+  dot_df$GeneRatio <- dot_df$gene_count / dot_df$setSize
+  ## Adding sign column (to split plot)
+  dot_df$sign = "Activated"
+  dot_df$sign[dot_df$NES < 0] = "Suppressed"
+  dot_df$sign <- as.factor(dot_df$sign)
+  ## Reshaping term names (to split longest ones)
+  dot_df$Description <- gsub(pattern = '_', ' ', dot_df$ID, fixed = TRUE)
+  
+  ## Add missing entries in Cluster a/o sign
+  if(fill) {
+    all_ent <- expand.grid(levels(dot_df$Cluster), levels(dot_df$sign))
+    for (ae in seq_len(nrow(all_ent))) {
+      # message(length(which(dot_df$Cluster %in% all_ent[ae,1])))
+      if(length(which(dot_df$Cluster %in% all_ent[ae,1] & dot_df$sign %in% all_ent[ae,2])) == 0) {
+        # message(ae)
+        dot_df <- rbind(dot_df, data.frame("Cluster" = all_ent[ae,1], "ID" = dot_df$ID[1], "Description" = dot_df$Description[1], "setSize" = 0, "enrichmentScore" = 0, "NES" = 0, "pvalue" = 1, "p.adjust" = 1, "qvalue" = 1, "rank" = 1, "leading_edge" = NA, "core_enrichment" = NA, "gene_count" = 0, "GeneRatio" = NA, "sign" = all_ent[ae,2]))
+      }
+    }
+  }
+  
+  ## Building plot
+  desc.tbl <- table(dot_df$Description)
+  desc.occ <- unname(desc.tbl[dot_df$Description])
+  cdp <- ggplot2::ggplot(dot_df, ggplot2::aes(x = GeneRatio, y = forcats::fct_reorder(Description, desc.occ, .desc = FALSE))) + 
+    ggplot2::geom_point(ggplot2::aes(size = gene_count, color = p.adjust)) +
+    ggplot2::geom_segment(ggplot2::aes(x = 0, xend = GeneRatio, color = p.adjust)) +
+    
+    ggplot2::theme_bw(base_size = 14) +
+    ggplot2::scale_colour_gradient(limits=c(0, 0.05), low="red") +
+    ggplot2::ylab(NULL) +
+    ggplot2::ggtitle(title) + 
+    ggplot2::facet_grid(cols = ggplot2::vars(Cluster, sign)) +
+    ggplot2::scale_y_discrete(labels=function(x) stringr::str_wrap(x, width=40)) + 
+    ggplot2::scale_x_continuous(breaks = seq(0, 1, .5), limits = c(0,1))
+  if(plot) print(cdp)
+  if(return_object) return(cdp)
+}
+
+gsea_merge_dotplot(gsea_res_list = lapply(rds_list, readRDS))
 
 ## . Maths ====
 

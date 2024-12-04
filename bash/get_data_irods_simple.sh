@@ -11,8 +11,12 @@ for CL in ${COLLECLIST[@]}; do {
   echo ${CL}
   DSETID=`basename ${CL}`
   echo ${DSETID}
+  ## Get metadata for current KDI_ID
+  imeta ls -C ${CL}
+  ## Save KDI_ID in a log list
   echo ${DSETID} >> "${DATADIR}/filelist"
   mkdir -p "${DATADIR}/${DSETID}"
+  ## List physical files
   FILELIST=(`ils "${CL}/archive" | grep -v ':' | cut -d' ' -f 3`)
   for FL in ${FILELIST[@]}; do {
     echo "Retrieving ${FL} ...";

@@ -92,22 +92,22 @@ chifisher <- function(annot.table = NULL, query.vec = NULL, target.vec = NULL, t
   query.vec <- unique(query.vec)
   target.vec <- unique(target.vec)
   final <- matrix(NA, nrow=length(target.vec), ncol=length(query.vec))
-  for (k1 in 1:length(query.vec)) {
+  for (k1 in seq_along(query.vec)) {
     colclass <- query.vec[k1]
     ccnum <- which(colnames(annot.table) == colclass)
     if (length(ccnum) == 0) {
-      cat("Resquested query column [", colclass, "] could not be found !\n", sep="")
+      message("Resquested query column [", colclass, "] could not be found !\n", sep="")
       next
     }
     if (length(ccnum) > 1) {
-      cat("Requested query column ", colclass ," exists ", length(ccnum), " times !\nCan't choose ...\n", sep="")
+      message("Requested query column ", colclass ," exists ", length(ccnum), " times !\nCan't choose ...\n", sep="")
       next
     } else {
       classes <- as.factor(annot.table[,ccnum])
       ncateg <- nlevels(classes)
       tpv <- vector()
       # outname <- paste(test.type, "-TEST_", colclass, sfix,".txt", sep="")
-      for (k2 in 1:length(target.vec)) {
+      for (k2 in seq_along(target.vec)) {
 
         ## Dismiss if query and target are the same...
         if (query.vec[k1] == target.vec[k2]) {
@@ -115,17 +115,17 @@ chifisher <- function(annot.table = NULL, query.vec = NULL, target.vec = NULL, t
           next
         }
         ## Else :
-        message(paste0("Crossing [", query.vec[k1], "] with [", target.vec[k2], "] ..."))
+        message("Crossing [", query.vec[k1], "] with [", target.vec[k2], "] ...")
         ct <- target.vec[k2]
         ctnum <- which(colnames(annot.table) == ct)
         # message(ctnum)
         if (length(ctnum) == 0) {
-          message(paste0("Resquested target column [", ct, "] could not be found !"))
+          message("Resquested target column [", ct, "] could not be found !")
           tpv <- c(tpv, NA)
           next
         }
         if (length(ctnum) > 1) {
-          message(paste0("Requested target column ", ct, "exists ", length(ctnum), " times !\nCan't choose ..."))
+          message("Requested target column ", ct, "exists ", length(ctnum), " times !\nCan't choose ...")
           tpv <- c(tpv, NA)
           next
         } else {
@@ -145,7 +145,7 @@ chifisher <- function(annot.table = NULL, query.vec = NULL, target.vec = NULL, t
                 Tres <- t.test(annot.table[,ctnum] ~ classes)
               }
               ## Wilcoxon
-              if ((ncateg == 2) & (test.type.2 == "W")) {
+              if (test.type.2 == "W") {
                 Tres <- wilcox.test(annot.table[,ctnum] ~ classes)
               }
             }
@@ -240,7 +240,7 @@ chifisher <- function(annot.table = NULL, query.vec = NULL, target.vec = NULL, t
       			if (test.type == "X2") write.table(paste("\n",Tres$method, ":\nX2 statistic = ", Tres$statistic, ", p-value = ", Tres$p.value, "\n\n\n", sep=""), paste0(outname, ".txt"), append=T, sep="\t", quote=F, col.names=F, row.names=F)
       		}
 
-    			if (Tres$p.value < 1E-05) message("*****") else if (Tres$p.value < 1E-03) message("***") else if (Tres$p.value < 5E-02) message("*") else if (Tres$p.value < 1E-01) message("~")
+    			if(is.na(Tres$p.value)) message("NA") else if (Tres$p.value < 1E-05) message("*****") else if (Tres$p.value < 1E-03) message("***") else if (Tres$p.value < 5E-02) message("*") else if (Tres$p.value < 1E-01) message("~")
 
     			tpv <- c(tpv, Tres$p.value)
     		}

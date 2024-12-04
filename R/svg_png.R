@@ -1,3 +1,11 @@
+## Packages test version
+###########
+## rsvg               2.6.1
+## R.utils            2.12.3
+
+
+
+
 ## Convert SVG to PNG ====
 .svg_convert <- function(svg_files = NULL, format = 'png', compress = TRUE, ...) {
   valid_formats <- c('eps', 'png', 'pdf', 'ps', 'svg')
