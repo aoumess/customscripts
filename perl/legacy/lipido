@@ -1,0 +1,161 @@
+#!/usr/bin/perl
+use strict;
+
+my $version = '1.1 20120515';
+
+## NOTES DE VERSION;
+##
+## 1.1	20120515	. Modified EPIC_c hash entry.
+##			. Added FAME hash entry.
+##			. Added finer support for source files with different configurations.
+##			. Added better handling of unknown entries ("?"). Now, they are concatenated instrad of giving the last value, when more tahn one are found.
+##			. Now the script handles the case where no argument is given.
+##			. Added an error message when the given -order is not in the predefined list.
+
+##
+## 1.02	20120403	. Modified support for "18;2w6c" to "18:2w6" for all peaklists, as Agilent changed the naming to the latter.
+##
+## 1.01	20120330	. Added support for unknown lipids "?"
+##
+## 1.0	20120329	. New Perl script based on the python script from Hugues Ripoche. First release
+
+
+my %peaklist = (	'colon'		=> ["8:0", "10:0", "11:0", "12:0", "13:0", "14:0", "15:0", "16:0", "17:0", "18:0", "20:0", "21:0", "22:0", "23:0", "24:0", "14:1", "15:1", "16:1w7t", "16:1w7c", "17:1", "18:1w9t", "18:1w9c", "18:1w7c", "20:1", "22:1w9", "24:1", "18:2w6t", "18:2w6", "18:3w6", "20:2w6", "20:3w6", "20:4w6", "22:2w6", "22:4w6", "22:5w6", "18:3w3", "20:3w3", "20:5w3", "22:5w3", "22:6w3", "?"]
+			, 'colon_c'	=> ["8:0", "10:0", "11:0", "12:0", "13:0", "14:0", "15:0", "16:0", "17:0", "18:0", "20:0", "21:0", "22:0", "23:0", "24:0", "14:1", "15:1", "16:1w7t", "16:1w7c", "17:1", "18:1w9t", "18:1w9c", "18:1w7c", "20:1", "22:1w9", "24:1", "18:2w6t", "18:2w6c", "18:3w6", "20:2w6", "20:3w6", "20:4w6", "22:2w6", "22:4w6", "22:5w6", "18:3w3", "20:3w3", "20:5w3", "22:5w3", "22:6w3", "?"]
+			, 'breast'	=> ["16:0", "17:0", "18:0", "20:0", "21:0", "22:0", "24:0", "14:1", "15:1", "16:1w7t/w9t", "16:1w7c", "17:1", "18:1w9t", "18:1w7t/w8t", "18:1w9c", "18:1w7c", "18:1w5c", "18:2w6tt", "18:2w6ct", "18:2w6tc", "20:1w9", "22:1w9", "24:1w9", "18:2w6t", "18:2w6", "18:3w6", "20:2w6", "20:3w9", "20:3w6", "20:4w6", "22:4w6", "22:5w6", "18:3w3", "20:3w3", "20:5w3", "22:5w3", "22:6w3", "16:1w9t", "ni", "9.11cla", "10.12cla", "?"]
+			, 'breast_c'	=> ["16:0", "17:0", "18:0", "20:0", "21:0", "22:0", "24:0", "14:1", "15:1", "16:1w7t/w9t", "16:1w7c", "17:1", "18:1w9t", "18:1w7t/w8t", "18:1w9c", "18:1w7c", "18:1w5c", "18:2w6tt", "18:2w6ct", "18:2w6tc", "20:1w9", "22:1w9", "24:1w9", "18:2w6t", "18:2w6c", "18:3w6", "20:2w6", "20:3w9", "20:3w6", "20:4w6", "22:4w6", "22:5w6", "18:3w3", "20:3w3", "20:5w3", "22:5w3", "22:6w3", "16:1w9t", "ni", "9.11cla", "10.12cla", "?"]
+			, 'EPIC'	=> ["stdi", "14:0", "15:0", "16:0", "17:0", "18:0", "20:0", "21:0", "22:0", "24:0", "14:1", "15:1", "16:1w7t/w9t", "16:1w7c", "17:1", "18:1w9t", "18:1w7t/w8t", "18:1w9c", "18:1w7c", "18:1w5c", "20:1w9", "22:1w9", "24:1w9", "18:2w6tt", "18:2w6ct", "18:2w6tc", "18:2w6", "18:3w6", "20:2w6", "20:3w9", "20:3w6", "20:4w6", "22:4w6", "22:5w6", "18:3w3", "20:3w3", "20:5w3", "22:5w3", "22:6w3", "ni", "9.11cla", "10.12cla", "?"]
+			, 'EPIC_c'	=> [ "14:0", "15:0", "16:0", "17:0", "18:0", "20:0", "21:0", "22:0", "24:0", "14:1", "15:1", "16:1w7t/w9t", "16:1w7c", "17:1", "18:1w9t", "18:1w7t/w8t", "18:1ni1", "18:1ni2", "18:1w9c", "18:1w7c", "18:1w5c", "20:1w9", "22:1w9", "24:1w9", "18:2w6tt", "18:2w6ct", "18:2w6tc", "18:2w6", "18:3w6", "20:2w6", "20:3w9", "20:3w6", "20:4w6", "22:4w6", "22:5w6", "18:3w3", "20:3w3", "20:5w3", "22:5w3", "22:6w3", "ni", "9.11cla", "10.12cla", "?"]
+			, 'FAME'	=> [ "14:0", "15:0", "16:0", "17:0", "18:0", "20:0", "21:0", "22:0", "24:0", "14:1n-5", "15:1", "16:1n-7t/n-9t", "16:1n-7c/n-9c", "17:1", "18:1n-9t", "18:1n-7t", "18:1ni1", "18:1ni2", "18:1n-9c", "18:1n-7c", "18:1n-5c", "20:1n-9", "22:1n-9", "24:1n-9", "18:2n-6tt", "18:2n-6ct", "18:2n-6tc", "18:2n-6", "18:3n-6", "20:2n-6c", "20:3n-9", "20:3n-6", "20:4n-6", "22:4n-6", "22:5n-6", "18:3n-3", "20:3n-3", "20:5n-3", "22:5n-3", "22:6n-3", "ni", "9.11cla", "10.12cla", "?"]
+		);
+
+
+my $order = 'epic';
+
+map chomp, @ARGV;
+
+if (($ARGV[0] eq '-h') or (scalar(@ARGV) == 0)) {
+	print '
+LIPIDO v'.$version.'
+
+USAGE:
+"lipido -order [colon|breast|epic]"
+
+REQUIRED OPTIONS :
+
+FACULTATIVE OPTIONS :
+      -order	Gives the order of lipids to display ['.$order.']
+
+NOTA : Possible orders are :
+';
+print join(", ", sort(keys(%peaklist)))."\n\n";
+exit;
+}
+
+
+
+foreach my $i (0..$#ARGV) {
+	if ($ARGV[$i] =~ /-order$/) {
+		$order = $ARGV[$i+1];
+	}
+}
+
+## Check on $order
+if (!exists($peaklist{$order})) {
+	die "\nERROR : Unknown order ! Please check available orders by launching : lipido -h\n\n";
+}
+
+print "ORDER used\t",$order,"\n";
+
+my @repz = `ls --file-type | grep /`;
+map chomp, @repz;
+# print join("\t", "REPZ:", @repz)."\n";
+
+open OUT, ">chromato_".$order.".txt" or die $!;
+print OUT join("\t", 'Folder', 'NumAgilent', 'SampleName', @{$peaklist{$order}})."\n";
+
+foreach my $r (0..$#repz) {
+	my @numa = `ls --file-type $repz[$r] | grep /`;
+	map chomp, @numa;
+# 	print join("\t", "REPZ:", @repz)."\n";
+# 	print $repz[$r]," :\n",join("\t", @numa),"\n";
+	
+	foreach my $n (0..$#numa) {
+		my $snam = 'unknown_sample';
+		
+		my $freq_cmd = 'file -b -i '.$repz[$r].$numa[$n].'Report00.CSV';
+		my $freq = `$freq_cmd` or next;
+		my $enc = (split /\=/, $freq)[1];
+		
+		open INFO, "<:encoding(".$enc.")",$repz[$r].$numa[$n].'Report00.CSV' or next;
+		foreach my $l (<INFO>) {
+			chomp $l;
+			$l =~ s/\"//g;
+			$l =~ s/\n//g;
+			$l =~ s/\r//g;
+			
+			if ($l =~ /Sample Name/i) {
+				my @temp = split /,/, $l;
+				$snam = $temp[1];
+			}
+		}
+		close INFO;
+		
+		my $freq_cmd = 'file -b -i '.$repz[$r].$numa[$n].'REPORT01.CSV';
+		my $freq = `$freq_cmd` or next;
+		my $enc = (split /\=/, $freq)[1];
+		my %dataz = ();
+		open DATA, "<:encoding(".$enc.")",$repz[$r].$numa[$n].'REPORT01.CSV' or next;
+		foreach my $l (<DATA>) {
+			chomp $l;
+# 			$l =~ s/\"//g;
+			$l =~ s/\"\"/"NA"/g;
+			$l =~ s/\n//g;
+			$l =~ s/\r//g;
+			
+			## Tweak for comas in lipid name
+			$l =~ s/10\,12cla/10.12cla/i;
+			$l =~ s/9\,11cla/9.11cla/i;
+			
+# 			my @temp = split /\,/, $l;
+# 			my @temp = split /".+"|\,+/g, $l;
+			
+			
+			my @temp = split /\"/, $l;
+# 			print join("\t", "TEMP:", join("*", @temp))."\n";
+			my $oval = '';
+			foreach my $t (@temp) {
+				my @temp2 = split /\,/, $t;
+# 				print join("\t", "TEMP2:", join("*", @temp2))."\n";
+				if (scalar(@temp2) == 4) {
+					$oval = $temp2[3];
+					next;
+				}
+			}
+# 			print join("\t", "FOUND:", $oval, $temp[$#temp])."\n";
+			if (!exists $dataz{$temp[$#temp]}) {
+				$dataz{$temp[$#temp]} = $oval;
+			}
+			else {
+				$dataz{$temp[$#temp]} = join(",", $dataz{$temp[$#temp]}, $oval);
+			}
+		}
+		close DATA;
+		
+		my $wr = $repz[$r];
+		$wr =~ s/\///;
+		my $wn = $numa[$n];
+		$wn =~ s/\///;
+		print OUT join("\t", $wr, $wn, $snam);
+		foreach my $m (@{$peaklist{$order}}) {
+			if ((exists $dataz{$m}) and ($dataz{$m} ne '')) {
+				print OUT "\t".$dataz{$m};
+			}
+			else {
+				print OUT "\tNA";
+			}
+		}
+		print OUT "\n";
+	}
+}
+close OUT;

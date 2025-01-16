@@ -1,0 +1,317 @@
+#!/usr/bin/perl
+use strict;
+
+my $version = '1.1 20121010';
+
+## Tmbed
+##
+## DESCRIPTION
+##
+## This script performs the computations of melting temperature (Tm) of DNA fragments, based
+## on the nearest-neighbor method. It works from BED files available from Agilent for each
+## of their microarray.
+##
+## VERSION NOTES
+##
+## 1.1	20121010
+##	. Corrected a bug in the support of non-human genomes, where gonosomes where still kept as chr23 and chr24...
+##
+## 1.0	20111122
+##	. First release. Based on GCget v1.1 20111123
+
+
+
+## Gestion des arguments;
+foreach (@ARGV) {
+	chomp;
+}
+
+my %chrom2chr = (	'hs' => { 'chr1' => 1, 'chr2' => 2, 'chr3' => 3, 'chr4' => 4, 'chr5' => 5, 'chr6' => 6, 'chr7' => 7, 'chr8' => 8, 'chr9' => 9, 'chr10' => 10, 'chr11' => 11, 'chr12' => 12, 'chr13' => 13, 'chr14' => 14, 'chr15' => 15, 'chr16' => 16, 'chr17' => 17, 'chr18' => 18, 'chr19' => 19, 'chr20' => 20, 'chr21' => 21, 'chr22' => 22, 'chrX' => 23, 'chrY' => 24 },
+			'mm' => { 'chr1' => 1, 'chr2' => 2, 'chr3' => 3, 'chr4' => 4, 'chr5' => 5, 'chr6' => 6, 'chr7' => 7, 'chr8' => 8, 'chr9' => 9, 'chr10' => 10, 'chr11' => 11, 'chr12' => 12, 'chr13' => 13, 'chr14' => 14, 'chr15' => 15, 'chr16' => 16, 'chr17' => 17, 'chr18' => 18, 'chr19' => 19, 'chrX' => 20, 'chrY' => 21 });
+
+my %chr2chrom = ();
+foreach my $k (keys(%chrom2chr)) {
+	foreach my $c (keys(%{$chrom2chr{$k}})) {
+		$chr2chrom{$k}{$c} = $c;
+	}
+}
+
+my @add_cgh = (0, 100, 250, 500, 750, 1000, 2500, 5000, 10000, 50000, 100000);
+my @add_chip = (0, 100, 200, 300, 400, 500, 600, 1000, 5000, 10000, 50000, 100000);
+
+## Hash of dH, dS and dG for duplets
+my %tmd = (	'AA' =>	[ -33.1, -92.9, -4.26 ],
+		'AC' =>	[ -35.1, -93.7, -6.09 ],
+		'AG' =>	[ -32.6, -87.9, -5.40 ],
+		'AT' =>	[ -30.1, -85.4, -3.67 ],
+		'CA' =>	[ -35.6, -95.0, -6.12 ],
+		'CC' =>	[ -33.5, -83.3, -7.66 ],
+		'CG' =>	[ -44.4, -113.8, -9.07 ],
+		'CT' =>	[ -32.6, -87.9, -5.40 ],
+		'GA' =>	[ -34.3, -92.9, -5.51 ],
+		'GC' =>	[ -41.0, -102.1, -9.36 ],
+		'GG' =>	[ -33.5, -83.3, -7.66 ],
+		'GT' =>	[ -35.1, -93.7, -6.09 ],
+		'TA' =>	[ -30.1, -89.1, -2.50 ],
+		'TC' =>	[ -34.3, -92.9, -5.51 ],
+		'TG' =>	[ -35.6, -95.0, -6.12 ],
+		'TT' =>	[ -33.1, -92.9, -4.26 ],
+		'AN' => [ -33.5, -92.9, -6.09 ],
+		'CN' => [ -33.5, -92.9, -6.09 ],
+		'GN' => [ -33.5, -92.9, -6.09 ],
+		'TN' => [ -33.5, -92.9, -6.09 ],
+		'NA' => [ -33.5, -92.9, -6.09 ],
+		'NC' => [ -33.5, -92.9, -6.09 ],
+		'NG' => [ -33.5, -92.9, -6.09 ],
+		'NT' => [ -33.5, -92.9, -6.09 ],
+		'NN' => [ -33.5, -92.9, -6.09 ] );
+
+## Hash of dH, dS and dG for terminal nucleotides
+my %tmt = (	'A' =>	[ 9.6, 17.2, 4.31 ],
+		'T' =>	[ 9.6, 17.2, 4.31 ],
+		'G' =>	[ 0.4, -11.7, 4.05 ],
+		'C' =>	[ 0.4, -11.7, 4.05 ],
+		'N' =>	[ 5.0, 2.75, 4.18 ] );
+my $sp = 'hs';
+my $gb = 19;
+my $addmode = 'cgh';
+my @add=@add_cgh;
+my $db = '/mnt/db';
+my $nomh = 'Y';
+my $v = 'F';
+
+
+if (scalar(@ARGV) == 0) {
+	print '
+Tmbed v'.$version.'
+ for Tm computation from BED files.
+
+DESCRIPTION: This script gets a list of genomic positions from an Agilent BED file,
+then computes the melting temperature (Tm) of the sequence contained between these
+positions, plus a given set of windows adding genomic content at both ends. It also
+can be used for different species and genome builds. By default, probes with multiple
+genomic hits will be discarded.
+
+USAGE:
+ Tmbed file.bed -sp [hs|mm] -gb [18|19|9] -add [cgh|chip|0,100,5000,...] -db [path] -nomh [Y|N] -v
+
+<file.bed> A BED file from Agilent eArray
+
+<-sp> The species (hs or mm).['.$sp.']
+
+<-gb> The genome build (18 or 19 for hs, 9 for mm). ['.$gb.']
+
+<-add> The set of windows sizes. Two included sets can be called : "cgh" which will use
+       these sizes (0, 100, 250, 500, 750, 1000, 2500, 5000, 10000, 50000, 100000),
+       and "chip" (0, 100, 200, 300, 400, 500, 600, 1000, 5000, 10000, 50000, 100000).
+       For custom values, just type the sizes with a coma as separator, without
+       backspaces. Ex: 0,100,5000. ['.$addmode.']
+
+<-db> The pelican /db mount point. ['.$db.']
+
+<-nomh> Discard ProbeNames with multiple genomic hits. ['.$nomh.']
+
+<-v> Verbose mode.
+
+EXAMPLE:
+ Tmbed 022060_4x180K_hg19_20100501.bed -sp hs -gb 19 -add cgh -db /mnt/db -v
+
+';
+exit;
+}
+
+my %spconv = ('hs' => 'hg', 'mm' => 'mm');
+my %pathend = ('hg18' => 'hg18', 'hg19' => 'current', 'mm9' => 'currentmm');
+
+foreach my $i (0..$#ARGV) {
+	if ($ARGV[$i] =~ /^-sp/) {
+		$sp = $ARGV[$i+1];
+	}
+	elsif ($ARGV[$i] =~ /^-gb/) {
+		$gb = $ARGV[$i+1];
+	}
+	elsif ($ARGV[$i] =~ /^-add/) {
+		if (lc($ARGV[$i+1]) eq 'cgh') {
+			@add = @add_cgh;
+		}
+		elsif (lc($ARGV[$i+1]) eq 'chip') {
+			@add = @add_chip;
+		}
+		else {
+			@add = split "\,", $ARGV[$i+1];
+		}
+	}
+	elsif ($ARGV[$i] =~ /^-db/) {
+		$db = $ARGV[$i+1];
+	}
+	elsif ($ARGV[$i] =~ /^-v/) {
+		$v = 'T';
+	}
+}
+
+## Checks
+my $gv = $spconv{$sp}.$gb;
+if ( !exists $pathend{$gv}) { print "\n *ERROR* Could not understand the species and/or genome build.\n"; exit; }
+
+print "\nWorking on ".$gv.".\nAdding sizes : ".join(", ", @add)."\n";
+
+
+## Counting input files
+my $filelist = shift @ARGV;
+my @filez = `ls $filelist`;
+print "\n".@filez." file(s) found.\n\n";
+if (scalar(@filez) == 0) {
+	exit;
+}
+
+## Processing input files
+foreach my $infile (@filez) {
+	chomp $infile;
+	print "Working on ".$infile." :\n";
+	if (lc($nomh) eq 'n') { print "!! WARNING : MULTI-HITS PROBES WILL BE KEPT !!\n"; }
+	print "\tLoading data ...\n";
+	open IN, $infile or die $!;
+	my @big = ();
+	my %smark=();
+	
+	MARK : foreach my $line (<IN>) {
+		$line =~ s/\n//;
+		$line =~ s/\r//;
+		my @temp = split "\t", $line;
+		
+		if ($temp[0] =~ /^chr([0-9]+|X|Y)$/) {
+			
+			if (!exists $smark{$temp[3]}) {
+				$smark{$temp[3]} = [ [ @temp[3,0], $chrom2chr{$sp}{$temp[0]}, @temp[1,2] ] ];
+			}
+			else {
+				foreach my $h (0..$#{$smark{$temp[3]}}) {
+					if (${${$smark{$temp[3]}}[$h]}[3] == $temp[1]) {
+						next MARK;
+					}
+				}
+				push @{$smark{$temp[3]}}, [ @temp[3,0], $chrom2chr{$sp}{$temp[0]}, @temp[1,2] ];
+			}
+		}
+	}
+	close IN;
+	print "\tDone.\n";
+	
+	print "\nFound ".scalar(keys(%smark))." unique markers.\n";
+	
+	## Filtering out multi-hits
+	if (lc($nomh) eq 'y') {
+		if ($v eq 'T') { print "Finding multi-hits markers ...\n"; }
+		foreach my $m (keys(%smark)) {
+			if (scalar(@{$smark{$m}}) == 1) {
+				push @big, @{$smark{$m}};
+			}
+			elsif ($v eq 'T') {
+				print $m." has multi-hits:\n";
+				foreach my $h (0..$#{$smark{$m}}) {
+					print join("\t", @{${$smark{$m}}[$h]}[1,3,4])."\n";
+				}
+			}
+		}
+		print "Found ".scalar(@big)." unique single-hit markers.\n";
+	}
+	## (or not) !! Not recommanded !!
+	else {
+		foreach my $m (keys(%smark)) {
+			push @big, @{$smark{$m}};
+		}
+	}
+	## destroying %smark
+	foreach (keys(%smark)) {
+		delete $smark{$_};
+	}
+	undef %smark;
+	
+	## Sorting @big by chr => start => end
+	@big = sort { ${$a}[2] <=> ${$b}[2] || ${$a}[3] <=> ${$b}[3] || ${$a}[4] <=> ${$b}[4] } @big;
+	
+	## Processing by line (marker)
+	my $linelength=0;
+	my $formerchr = '';
+	my @chrfa = ();
+	my $chrlen=0;
+	
+	foreach my $l (0..$#big) {
+		
+		## Getting the sequence of the newest chromosome called, if any
+		if ($big[$l][1] ne $formerchr) {
+			print "\t\tLoading ".$big[$l][1]." sequence...\n";
+			open CHRFA, $db.'/GoldenPath/'.$pathend{$gv}.'/chromosomes/'.$big[$l][1].'.fa' or die $!;
+			@chrfa = <CHRFA>;
+			close CHRFA;
+			## Removing the header (1 line)
+			shift @chrfa;
+			foreach (@chrfa) { chomp; }
+			## getting the max linelength for this fasta file (should be 50);
+			$linelength = length($chrfa[0]);
+			$formerchr = $big[$l][1];
+			$chrlen = $#chrfa * $linelength + length($chrfa[$#chrfa]);
+			print "\t\tDone (".$linelength.", ".$formerchr.").\n";
+		}
+		
+		foreach my $wadd (@add) {
+			
+			## defining start
+			my $start = $big[$l][3] - $wadd;
+			## correcting start if negative
+			if ($start <1) { $start = 1; }
+			## defining end
+			my $end = $big[$l][4] + $wadd;
+			## correcting end if above the total chromosome length
+			if ($end > $chrlen) { $end = $chrlen; }
+			
+			
+			my $width = $end - $start + 1;
+			
+			my $startline = sprintf("%i", $start/$linelength);
+			my $startchar = $start % $linelength;
+			my $endline = sprintf("%i", $end/$linelength);
+			my $endchar = $end % $linelength;
+			
+			my $charvec = join('', @chrfa[($startline-1)..($endline-1)]);
+			if ($endchar < 50) { $charvec = substr $charvec, 0, $endchar-$linelength; }
+			if ($startchar > 0) { $charvec = substr $charvec, $startchar-1; }
+			
+			## Splitting to duplets and singulets
+			$charvec = uc($charvec);
+			my @dchar = $charvec =~ /..?/sg;
+			
+			
+			## Computing Tm
+			my $tm = 0;
+			foreach my $sc (0..$#dchar) {
+				if (exists($tmd{$dchar[$sc]})) {
+					$tm += (${$tmd{$dchar[$sc]}}[0] - ${$tmd{$dchar[$sc]}}[2]) / ${$tmd{$dchar[$sc]}}[1];
+				}
+			}
+			
+			## Addind terminals
+			my @tstart = $dchar[0] =~ /./sg;
+			my @tend = $dchar[$#dchar] =~ /./sg;
+
+			$tm += (${$tmt{$tstart[0]}}[0] - ${$tmt{$tstart[0]}}[2]) / ${$tmt{$tstart[0]}}[1];
+			$tm += (${$tmt{$tend[$#tend]}}[0] - ${$tmt{$tend[$#tend]}}[2]) / ${$tmt{$tend[$#tend]}}[1];
+
+			push @{$big[$l]}, $tm;
+			
+		}
+		if ((($l % 1000) == 0) & ($l > 0)) { print "\t".sprintf("%.2f", ($l+1)/(scalar(@big)+1)*100)."% done.\n"; }
+	}
+	
+	my $outfile = $infile;
+	my $repword = "_".$gv.".tm";
+	$outfile =~ s/\.bed$/$repword/i;
+	
+	foreach my $ai (0..$#add) { $add[$ai] = 'Tm'.$add[$ai]; }
+	open OUT, ">".$outfile or die $!;
+	print OUT join("\t", 'Identifier', 'Chrom', 'Chr', 'Start', 'End', @add)."\n";
+	foreach my $l (0..$#big) {
+		print OUT join("\t", @{$big[$l]})."\n";
+	}
+	close OUT;
+}

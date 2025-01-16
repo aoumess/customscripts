@@ -1,6 +1,6 @@
 ---
 title: "BNNNNN_XXXX_NN RNA QC"
-author: "Bastien JOB<BR>bastien.job@gustaveroussy.fr"
+author: "BiGR Team<BR>bigr@gustaveroussy.fr"
 date: "`r format(Sys.time(), '%Y/%m/%d')`"
 output:
   html_document: 
@@ -96,11 +96,29 @@ flags_to_use <- c('OL_sparsity', 'OL_AQM_RAW_heatmap', 'OL_AQM_RAW_boxplot', 'OL
 
 ## Setup
 
+```{r source, message = FALSE}
+## Sourcing outside scripts
+source_script <- c('svg_png.R', 'RNA_functions.R')
+remote_dir <- 'https://github.com/aoumess/customscripts/raw/refs/heads/main/R'
+local_dir <- '/home/job/gits/customscripts/R'
+force_local <- TRUE
+for (ssc in source_script) {
+  if (force_local) {
+    message('Sourcing locally ...')
+    source(paste(c(local_dir, ssc), collapse = '/'))
+  } else {
+    message('Attempting sourcing remotely ...')
+    ssc_rep <- try(source(paste(c(remote_dir, ssc), collapse = '/')))
+    if(is(ssc_rep, class2 = 'try-error')) {
+      message('Failed. Sourcing locally ...')
+      source(paste(c(local_dir, ssc), collapse = '/'))
+    }
+  }
+}
+
+```
+
 ```{r setup_set, message = FALSE}
-
-## Sourcing outside scripts (for plotting/DEA/GSEA functions)
-source('/home/job/gits/customscripts/R/RNA_functions.R')
-
 ## Clean annotations colname variables
 box_categ <- lapply(box_categ, function(x) gsub(pattern = "\\W", replacement = '.', x = x))
 flags_to_use <- lapply(flags_to_use, function(x) gsub(pattern = "\\W", replacement = '.', x = x))
@@ -131,7 +149,24 @@ oripar <- par(no.readonly = TRUE)
 ```{r data_load}
 
 ## Load count data
-exp_mat <- read_pipeline_matrix(file = input_table_files)
+
+### nCounter
+if(tolower(input_type) == 'ncounter') {
+  # exp_mat <- read_pipeline_matrix(file = input_table_files)
+  ## Long code bloc to write due to the very unparsable/variable input format
+}
+
+### RNAseq SALMON BiGR pipeline
+if(tolower(input_type) == 'rnaseq_salmon') {
+  exp_mat <- read_pipeline_matrix(file = input_table_files)
+}
+
+### Just a matrix as TSV
+if(tolower(input_type) == 'tsv') {
+  exp_mat <- data.table::fread(file = input_table_files)
+}
+
+
 
 ## Sample names
 colnames(exp_mat)
@@ -171,7 +206,7 @@ exp_mat <- round(exp_mat)
 ```
 
 
-# Data preprocessing
+# Preprocess data
 
 * Converting counts data to log10(+1).
 
@@ -184,7 +219,7 @@ saveRDS(exp_l10, file = paste0(work_dir, '/l10counts', epsilon, '_', ncol(exp_l1
 ```
 
 
-# RAW QC
+# Raw data QC
 
 ## Sample-level sparsity
 
@@ -232,7 +267,7 @@ dim(exp_mat)
 exp_temp <- exp_mat
 ncount <- colSums(exp_temp)
 exp_temp[,ncount == 0] <- 1
-temp_eset <- Biobase::ExpressionSet(assayData = exp_temp, annotation = 'expMX_WTA', phenoData = new("AnnotatedDataFrame", data = annot_df))
+temp_eset <- Biobase::ExpressionSet(assayData = exp_temp, annotation = input_type, phenoData = new("AnnotatedDataFrame", data = annot_df))
 rm(exp_temp)
 ## Running AQM
 aqm_RAW <- arrayQualityMetrics::arrayQualityMetrics(expressionset = temp_eset, outdir = paste0(work_dir, '/AQM_RAW'), do.logtransform = TRUE, intgroup = unname(unlist(box_categ)), force = TRUE)
@@ -275,6 +310,17 @@ for (qc in seq_along(qc_categ)) categ.boxplot(x = exp_l10, annot_df = as.data.fr
 * Ipsum.
 * Dolor.
 
+## Counts vs sizeFactor check
+
+```{r sfcheck_init}
+## Computing size factors and dispersion
+de2 <- DESeq2::estimateSizeFactors(object = de2)
+## Plotting the vs plot
+ggdf <- data.frame(sizeFactor = de2$sizeFactor, Total_counts = ncount)
+rownames(ggdf) <- colnames(de2)
+ggplot2::ggplot(data = ggdf, ggplot2::aes(x = sizeFactor, y = Total_counts)) + ggplot2::geom_point() + ggplot2::geom_smooth(method=lm) + ggplot2::geom_rug() + ggrepel::geom_label_repel(label = rownames(ggdf)) + ggplot2::labs(title = 'Total counts vs DESeq2 sizeFactor (unfiltered)', subtitle = lm_eqn(df = ggdf, x = 'sizeFactor', y = 'Total_counts'))
+
+```
 
 # Normalization
 
@@ -308,13 +354,13 @@ saveRDS(de2.norm, file = paste0(work_dir, '/DESeq2Obj_Norm.', tolower(norm_metho
 # annot_df$sizeFactor <- de2.norm$sizeFactor
 ```
 
-# Norm QC
+# Normalized data QC
 
 
 ## Array Quality Metrics
 
 ```{r aqm_raw}
-temp_eset <- Biobase::ExpressionSet(assayData = SummarizedExperiment::assay(de2.norm), annotation = 'expMX_WTA', phenoData = new("AnnotatedDataFrame",data = as.data.frame(de2.norm@colData)))
+temp_eset <- Biobase::ExpressionSet(assayData = SummarizedExperiment::assay(de2.norm), annotation = input_type, phenoData = new("AnnotatedDataFrame",data = as.data.frame(de2.norm@colData)))
 ## Running AQM
 aqm_NORM <- arrayQualityMetrics::arrayQualityMetrics(expressionset = temp_eset, outdir = paste0(work_dir, '/AQM_NORM'), do.logtransform = FALSE, intgroup = unname(unlist(box_categ)), force = TRUE)
 rm(temp_eset)
@@ -377,18 +423,22 @@ for (qc in names(qc_categ)) {
 * Ipsum.
 * Dolor.
 
-# Outlier filtering
+# Outlying sample(s) filtering
 
-Here we will filter outlying samples thanks to the multiple metrics we generated
+## Outlier(s) identification
 
-```{r qc_filt}
+Here we identify outlying samples thanks to the multiple metrics we generated
+
+```{r qc_olid}
 flags_to_use
 all(flags_to_use %in% colnames(de2.norm@colData))
 samples_keep <- unname(matrixStats::rowCounts(x = as.matrix(de2.norm@colData[,flags_to_use]), value = 2) == 0)
-de2.norm$QC_sample_kept <- as.factor(samples_keep)
-
-## Discarded sample(s)
-colnames(de2.norm)[!samples_keep]
+if(length(samples_keep) > 0) {
+  de2.norm$QC_sample_kept <- as.factor(samples_keep)
+  
+  ## Discarded sample(s)
+  colnames(de2.norm)[!samples_keep]
+}
 
 ```
 
@@ -398,22 +448,53 @@ colnames(de2.norm)[!samples_keep]
 * Ipsum.
 * Dolor.
 
-# Saving
+## Filter outlier(s) & save
 
-```{r}
+```{r ol_filt}
+## Put new annotations from the normalized object to the original raw one
 SummarizedExperiment::colData(de2) <- SummarizedExperiment::colData(de2.norm)
 
-## Write out the prepped annot/QC table
+## Apply filters
+out.de2 <- de2[,samples_keep]
+out.de2@colData$sizeFactor <- NULL
+
+## Export filtered DESeq2 object with all annotation/QC metrics
+saveRDS(object = out.de2, file = paste0(work_dir, '/Raw_outlier.filtered_', length(which(samples_keep)), 's.RDS'), compress = 'bzip2')
+
+## Export the prepped annot/QC table
 qc_filename <- paste0(work_dir, '/', analysis_name, '_AnnotQC.xlsx')
 writexl::write_xlsx(x = as.data.frame(de2@colData), path = qc_filename, format_headers = TRUE)
 WriteXLS::WriteXLS(x = as.data.frame(de2@colData), ExcelFileName = qc_filename, AdjWidth = TRUE, AutoFilter = TRUE, BoldHeaderRow = TRUE, na = NA)
 
-## Export filtered DESeq2 object with all annotation/QC metrics
-out.de2 <- de2[,samples_keep]
-out.de2@colData$sizeFactor <- NULL
-saveRDS(object = out.de2, file = paste0(work_dir, '/Raw_outlier.filtered_', length(which(samples_keep)), 's.RDS'), compress = 'bzip2')
+```
+
+
+## Array Quality Metrics
+
+One last AQM to visualize the effect of removing putative outliers
+
+```{r aqm_ol}
+## Computing size factors and dispersion
+out.de2 <- DESeq2::estimateSizeFactors(object = out.de2)
+saveRDS(out.de2, file = paste0(work_dir, '/DESeq2Obj_Raw.RDS'), compress = 'bzip2')
+
+## Normalization
+if (tolower(norm_method) == 'vst') {
+  message('Normalizing using vst ...')
+  de2.norm <- DESeq2::vst(object = out.de2, blind = TRUE, nsub = 200)
+} else if (tolower(norm_method) == 'rlog') {
+  message('Normalizing using rlog ...')
+  de2.norm <- DESeq2::rlog(object = out.de2, blind = TRUE)
+}
+rm(out.de2)
+
+## Running AQM
+temp_eset <- Biobase::ExpressionSet(assayData = SummarizedExperiment::assay(de2.norm), annotation = input_type, phenoData = new("AnnotatedDataFrame",data = as.data.frame(de2.norm@colData)))
+aqm_NORM <- arrayQualityMetrics::arrayQualityMetrics(expressionset = temp_eset, outdir = paste0(work_dir, '/AQM_FILTERED'), do.logtransform = FALSE, intgroup = unname(unlist(box_categ)), force = TRUE)
+rm(temp_eset)
 
 ```
+
 
 # Rsession
 

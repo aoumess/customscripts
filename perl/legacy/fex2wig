@@ -1,0 +1,189 @@
+#!/usr/bin/perl
+use strict;
+
+## Description :	Script to convert *.fex files (extracted from FE files via the FEextract perl script) to *.wig
+##			(wiggles to be plotted into IGB or the UCSC genome browser). It also allows conversion to other
+##			types of values (ratio, log2ratio, log10ratio and Z-score).
+##
+## Notes de version
+## 2.0b	20140911
+#	. Changed option names to be more POSIX-compliant.
+## 2.0	20110722
+##	. Rewrote the script based on gcx2wig v3.0
+## 1.0	20101105
+##	. First release.
+
+
+my $version = '2.0b 20140911';
+
+
+sub sum {
+	my $summ = 0;
+	foreach (@_) {
+		$summ += $_;
+	}
+	return $summ;
+}
+
+sub sdme {
+	my @values = @_;
+	
+	my $n = scalar(@values);
+	my $avg = sum(@values)/$n;
+	my $std_dev = sqrt(sum(map {($_ - $avg) ** 2} @_) / $n);
+	
+	return $std_dev;
+}
+
+sub medianme {
+	my @values = sort { $a <=> $b } @_;
+	my $indice = int(scalar(@values) / 2);
+	
+	## The even case;
+	if ((scalar(@values) % 2) == 0) {
+		return ($values[$indice-1] + $values[$indice]) / 2;
+	}
+	## The odd case;
+	else {
+		return $values[$indice];
+	}
+}
+
+
+my %species = ('hs' => 'homo sapiens', 'mm' => 'mus musculus');
+my %versions = ('hs' => [16, 17, 18, 19], 'mm' => [8, 9]);
+my %hgh = ('16' => 'H_sapiens_Jul_2003', '17' => 'H_sapiens_May_2004', '18' => 'H_sapiens_Mar_2006', '19' => 'H_sapiens_Feb_2009');
+my %mmh = ('8' => 'M_musculus_Mar_2006', '9' => 'M_musculus_Jul_2007');
+my %hschrom2chr = ('chr1' => 1, 'chr2' => 2, 'chr3' => 3, 'chr4' => 4, 'chr5' => 5, 'chr6' => 6, 'chr7' => 7, 'chr8' => 8, 'chr9' => 9, 'chr10' => 10, 'chr11' => 11, 'chr12' => 12, 'chr13' => 13, 'chr14' => 14, 'chr15' => 15, 'chr16' => 16, 'chr17' => 17, 'chr18' => 18, 'chr19' => 19, 'chr20' => 20, 'chr21' => 21, 'chr22' => 22, 'chrX' => 23, 'chrY' => 24);
+my %mmchrom2chr = ('chr1' => 1, 'chr2' => 2, 'chr3' => 3, 'chr4' => 4, 'chr5' => 5, 'chr6' => 6, 'chr7' => 7, 'chr8' => 8, 'chr9' => 9, 'chr10' => 10, 'chr11' => 11, 'chr12' => 12, 'chr13' => 13, 'chr14' => 14, 'chr15' => 15, 'chr16' => 16, 'chr17' => 17, 'chr18' => 18, 'chr19' => 19, 'chr20' => 20, 'chrX' => 21, 'chrY' => 22);
+
+# my %ins = ('ratio' => 1, 'log2' => 2, 'log10' => 3);
+my %outs = ('ratio' => 1, 'log2' => 2, 'log10' => 3, 'z' => 4);
+
+
+
+my @inflist=();
+my $gtype='line';
+my $sp = 'hs';
+my $v = '19';
+# my $in='log2';
+my $out='log2';
+
+## On chomp le dernier argument;
+if (@ARGV > 0) { chomp($ARGV[$#ARGV]); }
+@inflist = (<$ARGV[0]>);
+
+
+if ($inflist[0] eq '') {
+# 	print "\n<<< NO INPUT FILE FOUND ! >>>\n\n";
+	print '
+FEX2WIG v'.$version.'
+ for FEX log10(ratio) file TO WIGgle data file converter.
+ IMPORTANT : This script requires a FEX file with only the LogRatio column !
+
+USAGE:
+"fex2wig [fexfiles] --sp [hs|mm] -v [16|17|18|19|8|9] --out [ratio|log2|log10|Z] -t [bar|line]"
+
+FACULTATIVE OPTIONS :
+	-t	Type of graphical output to be displayed in IGB. ['.$gtype.']
+	--sp	Species
+	-v	UCSC genome build version number
+	--out	Output data type (case insensitive) ['.$out.']
+	
+';
+	exit;
+}
+
+## Dealing with options
+foreach my $ar (0..$#ARGV) {
+	chomp $ARGV[$ar];
+	if ($ARGV[$ar] eq '-t') { $gtype = lc($ARGV[$ar+1]); }
+	if ($ARGV[$ar] eq '--sp') { $sp = $ARGV[$ar+1]; }
+	if ($ARGV[$ar] eq '-v') { $v = $ARGV[$ar+1]; }
+	if ($ARGV[$ar] eq '--out') { $out = lc($ARGV[$ar+1]); }
+}
+
+## Checking options
+if ($gtype !~ /^(bar|line)$/) {
+	print "\n<<< GRAPH TYPE OPTION NOT UNDERSTOOD ! >>>\n\n";
+	exit;
+}
+if (!exists $species{$sp}) {
+	print "\n<<< UNKNOWN SPECIES ! >>>\n\n";
+	exit;
+}
+if ( ($sp eq 'hs') and (!exists $hgh{$v}) ) {
+	print "\n<<< UNKNOWN HUMAN GENOME BUILD VERSION ! >>>\n\n";
+	exit;
+}
+if ( ($sp eq 'mm') and (!exists $mmh{$v}) ) {
+	print "\n<<< UNKNOWN MOUSE GENOME BUILD VERSION ! >>>\n\n";
+	exit;
+}
+if (!exists $outs{$out}) {
+	print "\n<<< UNKNOWN INPUT DATA TYPE ! >>>\n\n";
+	exit;
+}
+
+print "\n".@inflist." files to convert.\nSpecies : ".$sp."\nGenome version : ".$v."\nOutput data type : ".$out."\n\n";
+my $gvword = '';
+my %chrom2chr = ();
+if ($sp eq 'hs') {
+	$gvword = $hgh{$v};
+	%chrom2chr = %hschrom2chr;
+}
+if ($sp eq 'mm') {
+	$gvword = $mmh{$v};
+	%chrom2chr = %mmchrom2chr;
+}
+
+
+my %chr2chrom = ();
+foreach my $c (keys(%chrom2chr)) {
+	$chr2chrom{$chrom2chr{$c}} = $c;
+}
+
+
+
+foreach my $fil (@inflist) {
+	my $filename = $fil;
+# 	$filename =~ s/\.gcx$//i;
+	print 'Converting '.$filename." ...\n";
+	
+	
+	my @lines = ();
+	my @zstock = ();
+	my $etype = '';
+	open IN, $fil or die $!;
+	foreach my $l (<IN>) {
+		chomp $l;
+		my @temp = split /\t/, $l;
+		if ($l !~ /^ProbeName/) {
+			$temp[1] = $chr2chrom{$temp[1]};
+			if ($out eq 'log2') { $temp[$#temp] = sprintf("%.3f", log(10**$temp[$#temp])/log(2)); }
+			elsif ($out eq 'ratio') { $temp[$#temp] = sprintf("%.3f", 10**$temp[$#temp]); }
+			elsif ($out eq 'z') { push @zstock, $temp[$#temp]; }
+			push @lines, [ @temp[1..$#temp] ];
+		}
+	}
+	close IN;
+	
+	if ($out eq 'z') {
+		my $zmed = medianme @zstock;
+		my $zsd = sdme @zstock;
+# 		my @zstock2=();
+		foreach my $z (0..$#zstock) {
+			${$lines[$z]}[$#{$lines[$z]}] = ($zstock[$z]-$zmed)/$zsd;
+		}
+	}
+	
+	open OUT, ">".$filename."_".$out.".wig" or die $!;
+	print OUT 'track type=wiggle_0 name="'.$filename.'_'.$out.'" description="'.$filename.'_'.$out.'" graphtype='.$gtype.'
+#genome_version = '.$gvword.'
+#chrom	chromStart	chromEnd	'.$out.'
+';
+	foreach my $l (0..$#lines) {
+		print OUT join("\t", @{$lines[$l]})."\n";
+	}
+	close OUT;
+}

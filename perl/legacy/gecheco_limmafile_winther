@@ -1,0 +1,789 @@
+#!/usr/bin/perl
+use strict;
+
+my $version = 'X.1 20120601';
+
+
+## VERSION NOTES
+##
+## vX.1 20120601
+##	. Removed commercial molecules (GenenTech, Pfizer
+##
+## NOTES FROM BASE VERSION
+##
+## v0.3 20120531
+##	. Added two Pfizer molecules, with several subversions, depending on the direction (sensitivity/resistance) and confidence of the targets.
+##
+## v0.2	20120203
+##	. Added some Genentech molecules.
+##
+##
+## NOTES DE VERSION (ORIGINAL GECHECO)
+##
+## v0.4b	. Correction des indices de colonnes de lecture du fichier CTD depuis changement de structure (PMIDs en colonne 8).
+##		. Ajout de la g�n�ration d'un fichier texte annot� Mol�cule -> G�ne + NM (+PMID ?)
+##
+## v0.4		. Ajout des g�nes EGF et EREG sur demande de V.L. pour les mol�cules dont EGFR est cible.
+##		. Ajout fichier de sortie tri� selon score.
+##		. Ajout des g�nes suppl�mentaires trouv�s par Emilie HOLLVILLE
+
+my $time = time;
+my $db = '/mnt/db/';
+my $proj = '/mnt/proj';
+
+my %msbrand = (
+'cisplatin' => [ 'Abiplatin', 'Biocisplatinum', 'Briplatin', 'Carboquone', 'Cis Pt II', 'Cismaplat', 'Cisplatine', 'Cisplatyl', 'Citoplationo', 'Lederplatin', 'Neoplatin', 'Plastin', 'Platamine', 'Platiblastin', 'Platidiam', 'Platinex', 'Platinol', 'Platinol-AQ', 'Platinoxan', 'Randa' ],
+'carboplatin' => [ 'Paraplatin', 'Paraplatin-AQ' ],
+'gemcitabine' => [ 'DDFC', 'DFDC', 'GEO', 'Gemcin', 'Gemcitabina', 'Gemcitabine', 'HCl', 'Gemcitabine hydrochloride', 'Gemcitabinum', 'Gemtro', 'Gemzar' ],
+'pemetrexed' => [ 'Alimta' ],
+'vinorelbine' => [ 'Navelbine', 'Navelbine Base' ],
+'paclitaxel' => [ 'Epitaxol', 'LipoPac', 'Onxol', 'Paxceed', 'Paxene', 'Taxol', 'Taxol A', 'Vascular Wrap', 'Xorane' ],
+'docetaxel' => [ 'Taxotere' ],
+'etoposide' => [ 'Eposin', 'Etopophos', 'Lastet', 'Toposar', 'Vepesid', 'Vepesid J', 'Zuyeyidal' ],
+'bevacizumab' => [ 'Avastin' ],
+'erlotinib' => [ 'Tarceva' ],
+'gefitinib' => [ 'Iressa', 'Irressat', 'Tarceva' ],
+'crizotinib' => [ 'Xalkori' ],
+'onartuzumab' => [ 'MetMAb' ], 
+'tivantinib' => [ 'ARQ197' ],
+'sorafenib' => [ 'Nexavar' ],
+'SU5402' => [  ],
+'PD173074' => [  ],
+'ponatinib' => [ 'AP24534' ],
+'orantinib' => [ 'TSU-68', 'SU6668' ],
+'BGJ398' => [ 'pan FGFR kinase inhibitor BGJ398' ],
+'brivanib' => [ 'Brivanib alaninate', 'BMS-582664' ]
+);
+
+my $ms = [
+	[ 'Nucleotides',
+		[ 'Nucleotides >> Antimetabolites',
+			[ 'Nucleotides >> Antimetabolites >> Folic acid',
+				[ 'pemetrexed', ['TYMS', 'DHFR', 'GART'] ]
+			],
+			[ 'Nucleotides >> Antimetabolites >> Pyrimidine',
+				[ 'gemcitabine', ['TYMS', 'RRM1', 'CMPK'] ]
+			]
+		]
+	],
+	[ 'DNA',
+		[ 'DNA >> Alkylating agents',
+			[ 'DNA >> Alkylating agents >> Platinum',
+				[ 'carboplatin', ['ALB'] ],
+				[ 'cisplatin', ['RALBP1'] ]
+			],
+		],
+		[ 'DNA >> Spindle poisons / Mitotic inhibitors',
+			[ 'DNA >> Spindle poisons / Mitotic inhibitors >> Taxanes',
+				[ 'docetaxel', ['TUBB1', 'BCL2', 'CCNB1'] ],
+				[ 'paclitaxel', ['TUBB1', 'BCL2'] ]
+			],
+			[ 'DNA >> Spindle poisons / Mitotic inhibitors >> Vinca Alkaloids',
+				[ 'vinorelbine', ['TUBB2A', 'RALBP1'] ]
+			]
+		],
+		[ 'DNA >> Topoisomerase inhibitors',
+			[ 'DNA >> Topoisomerase inhibitors >> Podophyllum',
+				[ 'etoposide', ['TOP2A', 'MAP2K7'] ]
+			]
+		]
+	],
+	[ 'Cellular',
+		[ 'Cellular >> CI monoclonal antibodies',
+			[ 'Cellular >> CI monoclonal antibodies >> Other',
+				[ 'bevacizumab',  ['VEGFA'] ]
+			]
+		],
+		[ 'Cellular >> Tyrosine kinase inhibitors',
+			[ 'Cellular >> Tyrosine kinase inhibitors >> MET inhibitors',
+				[ 'crizotinib', [ 'ALK', 'ROS1', 'MET' ] ],
+				[ 'onartuzumab', [ 'MET', 'HGF' ] ],
+				[ 'tivantinib', [ 'MET', 'HGF' ] ]
+			],
+			[ 'Cellular >> Tyrosine kinase inhibitors >> FGFR1 inhibitors',
+				[ 'SU5402', [ 'FGFR1', 'EGFR'] ],
+				[ 'PD173074', [ 'FGFR1', 'KDR2' ] ],
+				[ 'ponatinib', [ 'FGFR1', 'ABL1', 'KDR', 'PDGFRA', 'FLT3', 'LYN' ] ],
+				[ 'orantinib', [ 'FGFR1', 'KDR', 'PDGFRB' ] ],
+				[ 'BGJ398', [ 'FGFR1', 'FGFR2', 'FGFR3', 'FGFR4' ] ],
+				[ 'brivanib', [ 'FGFR1', 'FGFR2', 'FGFR3', 'KDR', 'FLT1'] ]
+			],
+			[ 'Cellular >> Tyrosine kinase inhibitors >> Other',
+				[ 'erlotinib', ['EGFR', 'EGF', 'EREG'] ],
+				[ 'gefitinib', ['EGFR', 'EGF', 'EREG', 'PTEN', 'IGFBP3'] ],
+				[ 'sorafenib', ['FLT4', 'RAF1', 'FLT3', 'PDGFRB', 'KDR', 'KIT', 'BRAF', 'MAPK1', 'MAPK3', 'ERN1'] ]
+			]
+		]
+	]
+];
+
+
+
+my $mfc = 2;
+
+if (scalar(@ARGV) == 0) {
+	print '
+GECHECO_limma v'.$version."
+ for Gene Expression and CHEmicals COrrelation (limma version).
+
+DESCRIPTION: Attempts to identify interesting cancer treatment
+ chemicals from the coverage of their target genes found over-
+ or under-expressed in a sample.
+
+USAGE:
+ gecheco [limmafiles] -mfc [value]
+
+<limmafiles> One or many  data tables as given by Justine with columns :
+ [ProbeName], [Symbol], [Fold.Change], [Intensity1], [Intensity2].
+
+<-mfc> Minimal fold change (absolute value) to consider a GE probe.
+       [".$mfc."]
+
+VERSION NOTE :
+
+
+";
+exit;
+}
+
+
+
+
+## Gestion des arguments;
+foreach (@ARGV) {
+	chomp;
+}
+
+# my $infile = shift @ARGV;
+# my $lmfile = shift @ARGV;
+my @inflist = (<$ARGV[0]>);
+
+print "\nSAMPLES : ".@inflist."\n";
+
+## Initialisation des valeurs nulles pour les diff�rentes annotations, qui servent aussi de contr�le si jamais les fichiers source sont vides.
+my $ctdctrl = '-';
+
+## On importe les donn�es de tox CTD...
+my $ctdfile = $db.'/ctd/CTD_chem_gene_ixns.tsv';
+print "Importing CTD toxicology genes annotations ...\n";
+my %toxgenhash=();
+my %toxchemhash=();
+my %toxpub=();
+open CTDGEN, $ctdfile or die $!;
+foreach (<CTDGEN>) {
+	chomp;
+	if ($_ !~ /^\#/) {
+		my @temp = split /\t/, $_;
+#		if ($temp[6] == 9606) {
+		if ($temp[7] == 9606) {
+			if (!exists $toxgenhash{$temp[3]}) {
+				$toxgenhash{$temp[3]} = [ @temp[4,8] ];
+			}
+			else {
+#				push @{$toxgenhash{$temp[3]}}, $temp[8];
+				push @{$toxgenhash{$temp[3]}}, $temp[10];
+			}
+			push @{$toxchemhash{lc($temp[0])}}, $temp[3];
+			
+			if (exists $toxpub{lc($temp[0]).'_'.$temp[3]}) {
+#				push @{$toxpub{lc($temp[0]).'_'.$temp[3]}},  $temp[8];
+				push @{$toxpub{lc($temp[0]).'_'.$temp[3]}},  $temp[10];
+			}
+			else {
+#				$toxpub{lc($temp[0]).'_'.$temp[3]} = [ $temp[8] ];
+				$toxpub{lc($temp[0]).'_'.$temp[3]} = [ $temp[10] ];
+			}
+		}
+	}
+}
+close CTDGEN;
+
+
+my %toxgenhash_saved = %toxgenhash;
+
+## Petit filtrage du hash CTD pour �liminer la redondance de mol�cules chimiques issues de publi diff�rentes...
+print "\tfiltering data ...\n";
+print "\t\tremoving redundancy for same interaction from different publications...\n";
+print "\t\t\t".length(keys(%toxgenhash));
+foreach my $k (keys(%toxgenhash)) {
+	my %chemunik=();
+	foreach my $c (1..$#{$toxgenhash{$k}}) {
+		$chemunik{${$toxgenhash{$k}}[$c]}++;
+	}
+	$toxgenhash{$k} = [ ${$toxgenhash{$k}}[0], scalar(keys(%chemunik)) ];		## CTDid, Nb_CHEM;
+}
+print " to ".length(keys(%toxgenhash))."\n";
+
+## Filtrage aussi du hash des mol�cules car le m�me g�nes peut y appara�tre plusieurs fois;
+print "\t\tremoving redundancy for multiple occurrences of a gene for the same chemical...\n";
+print "\t\t\t".length(keys(%toxchemhash));
+foreach my $m (keys(%toxchemhash)) {
+	my %genunik=();
+	foreach my $gk (@{$toxchemhash{$m}}) {
+		$genunik{$gk}++;
+	}
+	$toxchemhash{$m} = [ sort(keys(%genunik)) ];
+}
+print " to ".length(keys(%toxchemhash))."\n";
+
+## Filtrage de toxpub pour eliminer les PMIDs pr�sents plusieurs fois pour un m�me couple mol�cule-g�ne;
+print "\t\tremoving redundancy of pulication source for the same chemical-target interaction...\n";
+print "\t\t\t".length(keys(%toxpub));
+foreach my $pm (keys(%toxpub)) {
+	my %pmidunik=();
+	foreach my $pmid (@{$toxpub{$pm}}) {
+		$pmidunik{$pmid}++;
+	}
+	$toxpub{$pm} = [ sort(keys(%pmidunik)) ];
+}
+print " to ".length(keys(%toxpub))."\n";
+
+my @toto = keys(%toxpub);
+# print "\nTOXPUB : \n".@toto."\n";
+# print $toto[0]."\t".$toxpub{$toto[0]}."\n";
+
+if (scalar(keys(%toxgenhash)) == 0) {
+	print "\n\tWARNING : No CTD info banked ! Problem with the source file ?\n\n";
+	$ctdctrl = '<B><I>E!</I></B>';
+}
+
+
+
+## On va plutot tenter ca depuis le fichier Locuslink, comme ca on aura la description.
+my %nmz=();
+open LL, $db.'/locuslink/Lkfunc' or die $!;
+foreach (<LL>) {
+	$_ =~ s/\n//;
+	$_ =~ s/\r//;
+	my @temp = split /\t/, $_;
+	$nmz{$temp[1]} = [ @temp[2,7] ];
+}
+close LL;
+
+
+############################################
+
+
+## Préparation de la table de scores
+
+my @dscorz=();
+
+foreach my $l1 (0..$#{$ms}) {
+	foreach my $l2 (1..$#{$ms->[$l1]}) {
+		foreach my $l3 (1..$#{$ms->[$l1]->[$l2]}) {
+			foreach my $l4 (1..$#{$ms->[$l1]->[$l2]->[$l3]}) {
+				push @dscorz, [ uc($ms->[$l1]->[$l2]->[$l3]->[$l4]->[0]) ];
+			}
+		}
+	}
+}
+
+
+
+
+## Calcul pour les échantillons
+my @samples=();
+foreach my $lmfile (@inflist) {
+	
+	my @tempy;
+	chomp $lmfile;
+	
+	my @lmdat=();
+	open LMF, $lmfile or die $!;
+	foreach my $l (<LMF>) {
+		chomp $l;
+		if ($l !~ /^Probes/) {
+			my @temp = split /\t/, $l;
+# 			push @lmdat, [ @temp ];
+			push @lmdat, [ @temp[0,4,1,2,3] ];	## Adaptation to Justine's script as of 20130311
+		}
+	}
+	close LMF;
+	
+	## Définition du nom d'échantillon à partir du filename
+	my $samplename = (split /normData\_bgSubstract\_/, $lmfile)[1];		# This filter is for the limma tables for lung Chemores from Justine
+# 	my $samplename = $lmfile;
+	$samplename =~ s/\.txt$//;
+	push @samples, $samplename;
+	
+	print "Working with ".$samplename." ...\n";
+	
+	my %inh=();
+	foreach my $ri (0..$#lmdat) {
+		if ( (${$lmdat[$ri]}[2] ne 'NA') and (abs(${$lmdat[$ri]}[2]) > $mfc) ) {
+			push @{$inh{${$lmdat[$ri]}[1]}}, ${$lmdat[$ri]}[2];
+		}
+	}
+	
+	print "\n\nINH: ".keys(%inh)."\n";
+	
+	## ctrl
+	$|++;
+	open CTRL, ">".'inh_ctrl' or die $!;
+	foreach my $x (sort(keys(%inh))) {
+		print CTRL join("\t", $x, @{$inh{$x}})."\n";
+	}
+	close CTRL;
+
+	## Classement des genes selon 3 statuts : que de la sur-exp, que de la sous-exp, ou les deux simultan�ment (car plusieurs probes!);
+	my %UP=();
+	my %DOWN=();
+	my %MIX=();
+	
+	foreach my $k (keys(%inh)) {
+		if (scalar(@{$inh{$k}}) == 1) {
+			if (${$inh{$k}}[0] > 0) {
+				$UP{$k} = [ @{$inh{$k}} ];
+			}
+			elsif (${$inh{$k}}[0] < 0) {
+				$DOWN{$k} = [ @{$inh{$k}} ];
+			}
+			else {
+				die "\nERROR : Gene ".$k." found with an unexpected fold-change value : ".${$inh{$k}}[0]."\n";
+			}
+		}
+		else {
+			my $cpos=0;
+			my $cneg=0;
+			foreach my $t (@{$inh{$k}}) {
+				if ($t > 0) {
+					$cpos++;
+				}
+				if ($t < 0) {
+					$cneg++;
+				}
+			}
+			if ( $cpos == scalar(@{$inh{$k}}) ) {
+				$UP{$k} = [ @{$inh{$k}} ];
+			}
+			elsif ( $cneg == scalar(@{$inh{$k}}) ) {
+				$DOWN{$k} = [ @{$inh{$k}} ];
+			}
+			else {
+				$MIX{$k} = [ @{$inh{$k}} ];
+			}
+		}
+	}
+
+	undef %inh;
+
+	print '
+
+	UP =	'.keys(%UP).'
+	DOWN =	'.keys(%DOWN).'
+	MIX =	'.keys(%MIX).'
+
+	';
+
+# 	open TLIST, ">Tlist.txt" or die $!;
+
+	open SCORCLASS, ">".$samplename."_mFC".$mfc."_SCOREsorted.chem.html" or die $!;
+
+	open MOLG, ">".$samplename."_mFC".$mfc.".chem.html" or die $!;
+	print MOLG '
+	<HTML>
+	<HEAD>
+	<TITLE>'.$samplename.' ('.$time.') - Chemicals and altered target genes expression, at a minimum FC of '.$mfc.'.</TITLE>
+	</HEAD>
+	<BODY BGCOLOR=#EEEEFF>
+	<TABLE BORDER=2 WIDTH=99% ALIGN=left>
+	<TR ALIGN=center BGCOLOR=orange>
+	<B><TH WIDTH=10%>Chemical</TH> <TH WIDTH=6%>Target Genes</TH> <TH WIDTH=30%>Target Genes List</TH> <TH WIDTH=6%>Found Targets</TH> <TH WIDTH=30%>Found Targets List (with fold-changes)</TH> <TH WIDTH=5%>Avg<BR>Abs(FC)</TH> <TH WIDTH 5%>Avg<BR>Abs(FC)<BR>UP-REG</TH> <TH WIDTH=5%> Score </TH></B>
+	</TR>';
+
+
+	print SCORCLASS '
+	<HTML>
+	<HEAD>
+	<TITLE>'.$samplename.' ('.$time.') - Chemicals and altered target genes expression, at a minimum FC of '.$mfc.', ordered by Score.</TITLE>
+	</HEAD>
+	<BODY BGCOLOR=#EEEEFF>
+	<TABLE BORDER=2 WIDTH=99% ALIGN=left>
+	<TR ALIGN=center BGCOLOR=orange>
+	<B><TH WIDTH=5%>#</TH> <TH WIDTH=10%>Chemical</TH> <TH WIDTH=6%>Target Genes</TH> <TH WIDTH=30%>Target Genes List</TH> <TH WIDTH=6%>Found Targets</TH> <TH WIDTH=30%>Found Targets List (with fold-changes)</TH> <TH WIDTH=5%>Avg<BR>Abs(FC)</TH> <TH WIDTH 5%>Avg<BR>Abs(FC)<BR>UP-REG</TH> <TH WIDTH=5%> Score </TH></B>
+	</TR>
+	';
+
+
+	my @BIGGIE;
+
+	foreach my $l1 (0..$#{$ms}) {
+		print MOLG '
+	<TR>
+	<TD COLSPAN=8 ALIGN=left BGCOLOR=green><B>'.$ms->[$l1]->[0].'</B></TD>
+	</TR>';
+	
+		foreach my $l2 (1..$#{$ms->[$l1]}) {
+			print MOLG '
+	<TR>
+	<TD COLSPAN=8 ALIGN=left BGCOLOR=red><B>'.$ms->[$l1]->[$l2]->[0].'</B></TD>
+	</TR>';
+	
+			foreach my $l3 (1..$#{$ms->[$l1]->[$l2]}) {
+				print MOLG '
+	<TR>
+	<TD COLSPAN=8 ALIGN=left BGCOLOR=#7FFFD4><B>'.$ms->[$l1]->[$l2]->[$l3]->[0].'</B></TD>
+	</TR>';
+				foreach my $l4 (1..$#{$ms->[$l1]->[$l2]->[$l3]}) {
+					
+					my @entity=();
+					
+					print MOLG '
+	<TR>
+	<TD WIDTH=10% ALIGN=center><B>'.uc($ms->[$l1]->[$l2]->[$l3]->[$l4]->[0]).'</B>';
+					
+					my $tempy = '<TD WIDTH=10% ALIGN=center><B>'.uc($ms->[$l1]->[$l2]->[$l3]->[$l4]->[0]).'</B>';
+	# 				push @entity, '<TR><TD WIDTH=10% ALIGN=center><B>'.uc($ms->[$l1]->[$l2]->[$l3]->[$l4]->[0]).'</B>';
+					
+					if (exists $msbrand{$ms->[$l1]->[$l2]->[$l3]->[$l4]->[0]}) {
+						if (scalar(@{$msbrand{$ms->[$l1]->[$l2]->[$l3]->[$l4]->[0]}}) > 0) {
+							print MOLG '<BR><I>('.join(", ", @{$msbrand{$ms->[$l1]->[$l2]->[$l3]->[$l4]->[0]}}).')</I>';
+							$tempy .= '<BR><I>('.join(", ", @{$msbrand{$ms->[$l1]->[$l2]->[$l3]->[$l4]->[0]}}).')</I>';
+						}
+					}
+					
+					print MOLG '
+	</TD> <TD WIDTH=6% ALIGN=center>';
+					
+					$tempy .= '</TD> <TD WIDTH=6% ALIGN=center>';
+					push @entity, $tempy;
+					
+					my $usen='';
+					my $dsen='';
+					my $msen='';
+					
+					my @accgl=();
+					
+					@accgl = @{$ms->[$l1]->[$l2]->[$l3]->[$l4]->[1]};
+					
+					if (exists $toxchemhash{lc($ms->[$l1]->[$l2]->[$l3]->[$l4]->[0])}) {
+						push @accgl,  @{$toxchemhash{lc($ms->[$l1]->[$l2]->[$l3]->[$l4]->[0])}};
+					}
+					
+					## Elimination des redondances de genes entre les deux sources (CTD et DrugBank)
+					my %gfilt=();
+					foreach my $g (@accgl) {
+						$gfilt{$g} = 1;
+					}
+					@accgl = sort {$a cmp $b} keys(%gfilt);
+					
+					print MOLG scalar(@accgl).'</TD> <TD WIDTH=30%>';
+					push @entity, scalar(@accgl).'</TD> <TD WIDTH=30%>';
+					
+					foreach my $gn (@accgl) {
+						my $bzz ='';
+						if (exists $toxpub{lc($ms->[$l1]->[$l2]->[$l3]->[$l4]->[0]).'_'.$gn}) {
+							$bzz = join(", ", @{$toxpub{lc($ms->[$l1]->[$l2]->[$l3]->[$l4]->[0]).'_'.$gn}});
+# 							if (exists $nmz{$gn}) {
+# 								print TLIST join("\t", uc($ms->[$l1]->[$l2]->[$l3]->[$l4]->[0]), @{$nmz{$gn}}, $gn, $bzz)."\n";
+# 							}
+# 							else {
+# 								print TLIST join("\t", uc($ms->[$l1]->[$l2]->[$l3]->[$l4]->[0]), '-', '-', $gn, $bzz)."\n";
+# 							}
+						}
+# 						else {
+# 							if (exists $nmz{$gn}) {
+# 								print TLIST join("\t", uc($ms->[$l1]->[$l2]->[$l3]->[$l4]->[0]), @{$nmz{$gn}}, $gn)."\n";
+# 							}
+# 							else {
+# 								print TLIST join("\t", uc($ms->[$l1]->[$l2]->[$l3]->[$l4]->[0]), '-', '-', $gn)."\n";
+# 							}
+# 						}
+					}
+					
+					my @avgfcu=();
+					my @avgfcd=();
+					my @avgfcm=();
+					
+					my ($tgxc, $tgxf, $ugxf, $ugxc, $dgxc, $mgxc) = (0, 0, 0, 0, 0, 0);
+					
+					if (scalar(@accgl) > 0) {
+						
+						print MOLG join(' ', @accgl).'</TD> <TD WIDTH=6% ALIGN=center>';
+						push @entity, join(' ', @accgl).'</TD> <TD WIDTH=6% ALIGN=center>';
+						
+						foreach my $tgx (@accgl) {
+							if (exists $UP{$tgx}) {
+								$tgxc++;
+								$ugxc++;
+							}
+							if (exists $DOWN{$tgx}) {
+								$tgxc++;
+								$dgxc++;
+							}
+							if (exists $MIX{$tgx}) {
+								$tgxc++;
+								$mgxc++;
+							}
+						}
+						if ($tgxc > 0) {
+							
+							$tgxf = $tgxc/scalar(@accgl)*100;
+							$ugxf = $ugxc/scalar(@accgl)*100;
+							
+							if ($mgxc > 0) {
+								
+								print MOLG '<B>'.$tgxc.'<BR>(<FONT COLOR=red>'.$ugxc.'</FONT>+<FONT COLOR=green>'.$dgxc.'</FONT>+<FONT COLOR=grey>'.$mgxc.'</FONT>)</B><BR>('.sprintf("%.1f", $tgxf).'%)</TD> <TD WIDTH=39%>';
+								push @entity, '<B>'.$tgxc.'<BR>(<FONT COLOR=red>'.$ugxc.'</FONT>+<FONT COLOR=green>'.$dgxc.'</FONT>+<FONT COLOR=grey>'.$mgxc.'</FONT>)</B><BR>('.sprintf("%.1f", $tgxf).'%)</TD> <TD WIDTH=39%>';
+							}
+							else {
+								print MOLG '<B>'.$tgxc.'<BR>(<FONT COLOR=red>'.$ugxc.'</FONT>+<FONT COLOR=green>'.$dgxc.'</FONT>)</B><BR>('.sprintf("%.1f", $tgxf).'%)</TD> <TD WIDTH=39%>';
+								push @entity, '<B>'.$tgxc.'<BR>(<FONT COLOR=red>'.$ugxc.'</FONT>+<FONT COLOR=green>'.$dgxc.'</FONT>)</B><BR>('.sprintf("%.1f", $tgxf).'%)</TD> <TD WIDTH=39%>';
+							}
+						}
+						else {
+							print MOLG '-</TD> <TD WIDTH=30% ALIGN=center>-</TD> <TD WIDTH=5% ALIGN=center>-</TD> <TD WIDTH=5% ALIGN=center>-</TD> <TD WIDTH=5% ALIGN=center>-</TD></TR>';
+							push @entity, '-</TD> <TD WIDTH=30% ALIGN=center>-</TD> <TD WIDTH=5% ALIGN=center>-</TD> <TD WIDTH=5% ALIGN=center>-</TD> <TD WIDTH=5% ALIGN=center>-</TD> </TR>';
+							push @tempy, 0;
+							next;
+						}
+						
+						foreach my $tg (0..$#accgl) {
+							if (exists $UP{$accgl[$tg]}) {
+								$usen .= '<FONT COLOR=red>'.$accgl[$tg].'</FONT> (';
+								
+								my @cfcavgtmp=();
+								
+								foreach my $cfc (0..$#{$UP{$accgl[$tg]}}) {
+									$usen .= '<FONT COLOR=red>';
+									
+									push @cfcavgtmp, abs(${$UP{$accgl[$tg]}}[$cfc]); 
+									
+									if (${$UP{$accgl[$tg]}}[$cfc] > 5) {
+										$usen .= '<B>';
+									}
+									if (${$UP{$accgl[$tg]}}[$cfc] > 100) {
+										$usen .= '<U>';
+									}
+									
+									$usen .= sprintf("%.2f", ${$UP{$accgl[$tg]}}[$cfc]);
+									
+									if (${$UP{$accgl[$tg]}}[$cfc] > 100) {
+										$usen .= '</U>';
+									}
+									if (${$UP{$accgl[$tg]}}[$cfc] > 5) {
+										$usen .= '</B>';
+									}
+									$usen .= '</FONT>';
+									
+									if ($cfc == $#{$UP{$accgl[$tg]}}) {
+										$usen .= ') ';
+									}
+									else {
+										$usen .= ', ';
+									}
+								}
+								
+								push @avgfcu, avg(@cfcavgtmp);
+							}
+							if (exists $DOWN{$accgl[$tg]}) {
+								$dsen .= '<FONT COLOR=green>'.$accgl[$tg].'</FONT> (';
+								
+								my @cfcavgtmp=();
+								
+								foreach my $cfc (0..$#{$DOWN{$accgl[$tg]}}) {
+									$dsen .= '<FONT COLOR=green>';
+									
+									push @cfcavgtmp, abs(${$DOWN{$accgl[$tg]}}[$cfc]);
+									
+									if (${$DOWN{$accgl[$tg]}}[$cfc] < -5) {
+										$dsen .= '<B>';
+									}
+									if (${$DOWN{$accgl[$tg]}}[$cfc] < -100) {
+										$dsen .= '<U>';
+									}
+									
+									$dsen .= sprintf("%.2f", ${$DOWN{$accgl[$tg]}}[$cfc]);
+									
+									if (${$DOWN{$accgl[$tg]}}[$cfc] < -100) {
+										$dsen .= '</U>';
+									}
+									if (${$DOWN{$accgl[$tg]}}[$cfc] < -5) {
+										$dsen .= '</B>';
+									}
+									$dsen .= '</FONT>';
+									
+									if ($cfc == $#{$DOWN{$accgl[$tg]}}) {
+										$dsen .= ') ';
+									}
+									else {
+										$dsen .= ', ';
+									}
+								}
+								
+								push @avgfcd, avg(@cfcavgtmp);
+							}
+							if (exists $MIX{$accgl[$tg]}) {
+								$msen .= '<FONT COLOR=grey><I>'.$accgl[$tg].'</I></FONT> (';
+								
+								my @cfcavgtmp=();
+								
+								foreach my $cfc (0..$#{$MIX{$accgl[$tg]}}) {
+									
+									push @cfcavgtmp, abs(${$MIX{$accgl[$tg]}}[$cfc]);
+									
+									$msen .= '<FONT COLOR=grey>';
+									if (abs(${$MIX{$accgl[$tg]}}[$cfc]) > 5) {
+										$msen .= '<B>';
+									}
+									if (abs(${$MIX{$accgl[$tg]}}[$cfc]) > 100) {
+										$msen .= '<U>';
+									}
+									
+									$msen .= sprintf("%.2f", ${$MIX{$accgl[$tg]}}[$cfc]);
+									
+									if (abs(${$MIX{$accgl[$tg]}}[$cfc]) > 100) {
+										$msen .= '</U>';
+									}
+									if (abs(${$MIX{$accgl[$tg]}}[$cfc]) > 5) {
+										$msen .= '</B>';
+									}
+									$msen .= '</FONT>';
+									
+									if ($cfc == $#{$MIX{$accgl[$tg]}}) {
+										$msen .= ') ';
+									}
+									else {
+										$msen .= ', ';
+									}
+								}
+								
+								push @avgfcm, avg(@cfcavgtmp);
+							}
+						}
+					}
+					my $finsen = join('<BR><BR>', $usen, $dsen, $msen);
+					$finsen =~ s/(^(<BR>)+|(<BR>)+$)//g;
+					
+					print MOLG $finsen;
+					
+					push @entity, $finsen;
+					
+					my $scory = 0;
+					if ($ugxc != 0) {
+	# 					$scory = avg(@avgfcu)*$ugxf/$ugxc;		# 1
+	# 					$scory = avg(@avgfcu)*$ugxf/$tgxc;		# 2
+	# 					$scory = avg(@avgfcu)*$ugxf/scalar(@accgl);	# 3
+						$scory = avg(@avgfcu)*$ugxf			# 4
+					}
+					
+					push @tempy, $scory;
+					
+					print MOLG '</TD> <TD WIDTH=5% ALIGN=center>'.sprintf("%.2f", avg(@avgfcu, @avgfcd, @avgfcm)).'</TD> <TD WIDTH=5% ALIGN=center><FONT COLOR=red>'.sprintf("%.2f", avg(@avgfcu)).'</FONT></TD> <TD WIDTH=5% ALIGN=center><B>'.sprintf("%i", $scory).'</B></TD>';
+	# 				print MOLG '</TD> <TD WIDTH=6% ALIGN=center><B>'.sprintf("%.2f", 'bouh').'</TD>';
+					push @entity, '</TD> <TD WIDTH=5% ALIGN=center>'.sprintf("%.2f", avg(@avgfcu, @avgfcd, @avgfcm)).'</TD> <TD WIDTH=5% ALIGN=center><FONT COLOR=red>'.sprintf("%.2f", avg(@avgfcu)).'</FONT></TD> <TD WIDTH=5% ALIGN=center><B>'.sprintf("%i", $scory).'</B></TD>';
+					push @entity, $scory;
+					
+					push @BIGGIE, [ @entity ];
+	# 				print "\tENTITY: ".(@entity)."\n";
+				}
+				print MOLG '
+	</TR>';
+			}
+		}
+	}
+	close MOLG;
+
+# 	close TLIST;
+
+	@BIGGIE = sort { ${$b}[6] <=> ${$a}[6] } @BIGGIE;
+	print "BIGGIE : ".scalar(@BIGGIE)."\n";
+	print "BIGGIE1 : ".scalar(@{$BIGGIE[0]})."\n";
+	foreach my $l (0..$#BIGGIE) {
+		print SCORCLASS '<TR> <TD WIDTH=5% ALIGN=center><B>'.($l+1).'</B></TD>'.join('', @{$BIGGIE[$l]}[0..5] ).'</TR>'."\n";
+	}
+	close SCORCLASS;
+	
+	print "TEMPY : ".@tempy."\n";
+	
+	foreach my $p (0..$#tempy) {
+		push @{$dscorz[$p]}, $tempy[$p];
+	}
+}
+
+
+open SCO, ">scorz.txt" or die $!;
+print SCO join("\t", 'Molecule', join("\t", @samples))."\n";
+foreach my $n (0..$#dscorz) {
+	print SCO join("\t", @{$dscorz[$n]})."\n";
+}
+close SCO;
+
+
+## Ranking
+
+# my @drankz=();
+# foreach my $l1 (0..$#{$ms}) {
+# 	foreach my $l2 (1..$#{$ms->[$l1]}) {
+# 		foreach my $l3 (1..$#{$ms->[$l1]->[$l2]}) {
+# 			foreach my $l4 (1..$#{$ms->[$l1]->[$l2]->[$l3]}) {
+# 				push @drankz, [ uc($ms->[$l1]->[$l2]->[$l3]->[$l4]->[0]) ];
+# 			}
+# 		}
+# 	}
+# }
+
+foreach my $p (1..$#{$dscorz[0]}) {
+	my @curranks=();
+	my %rankash=();
+	## Listing scores
+	foreach my $m (0..$#dscorz) {
+		push @curranks, ${$dscorz[$m]}[$p];
+	}
+	## Ranking scores;
+	@curranks = sort { $b <=> $a } @curranks;
+	## Creating hash of ranks;
+	foreach my $k (0..$#curranks) {
+		if (!exists $rankash{$curranks[$k]}) {
+			$rankash{$curranks[$k]} = $k+1;
+		}
+	}
+	foreach my $m (0..$#dscorz) {
+		${$dscorz[$m]}[$p] = $rankash{${$dscorz[$m]}[$p]};
+	}
+}
+
+open RANK, ">rankz.txt" or die $!;
+print RANK join("\t", 'Molecule', join("\t", @samples))."\n";
+foreach my $n (0..$#dscorz) {
+	print RANK join("\t", @{$dscorz[$n]})."\n";
+}
+close RANK;
+
+
+
+## Functions
+
+sub sum {
+	my @temp = @_;
+	my $count=0;
+	foreach my $c (@temp) {
+		$count += $c;
+	}
+	return $count;
+}
+
+
+sub avg {
+	my @temp = @_;
+	if (scalar(@temp) == 0) {
+		return 0;
+	}
+	return sum(@temp) / scalar(@temp);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

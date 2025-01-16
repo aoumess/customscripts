@@ -1,0 +1,292 @@
+#!/usr/bin/perl
+use strict;
+use Getopt::Long;
+
+my $version = '0.5 20121114';
+
+## pupwm
+##
+## DESCRIPTION
+##
+## Quantifies number of reads for windows of user-defined half-width and step from a pileup.
+## Also computes the GC% and amount of non-N letters in the window.
+## Maybe also some statistical values like the local variance, number of outliers, etc... ?
+##
+## VERSION NOTES
+##
+## 0.5	20121114
+##	. Added an option to discard non-canonical chromosomes, based on the chrom2chr hash (active by default)
+##	. Added an option to discard chrX.
+##	. Added help.
+##
+## 0.4	20121109
+##	. "Frameshift" bug resolved.
+##	. Changed options so that both triangular and rectangular smoothing can be performed simultaneously by default in a single run.
+##
+## 0.3	20121105
+##	. Advanced a bit in the bug that makes the script hang early on certain window/step sizes. Still not perfect though...
+##
+## 0.2	20121030
+##	. Rewrote from scratch. Works most of the time, handling triangular and rectangular windows, steps
+##	  and windows. Still requires debugging (sometimes stops too early, frameshift ??), and optim.
+##	. Added support for species to add ChrN in the output table (too long and hard to handle this
+##	  conversion in R).
+##
+## 0.1	20121025
+##	. Just started coding. Plan is to make this version compatible with pilup format only, taking care
+##	  of half-width and step, and coding a triangular averaging.
+
+
+
+## Handling options :
+##	-i	string	ASCII	pileup filename
+##	--hw	+int	>0	half-window size
+##	-s	+int	>1	step
+##	-o	string	ASCII	output root filename
+##	--sp	string	hs|mm	species
+##	--noX	flag		discard chrX
+##	--noY	flag		discard chrY
+##	--nc	flag		allow non-canonical chromosomes
+
+$|++;
+
+if (scalar(@ARGV) == 0) {
+	print '
+pupwm v'.$version.'
+ for Pileup Window Maker.
+
+DESCRIPTION
+ This script performs the reduction of number of reads counts from a pileup
+ input file, averging them using triangular or rectangular windows which
+ width and steps are user-given. User can also remove chrX and/or chrY, as
+ well as tolerate non-canonical chromosomes (ex : chrM).
+
+USAGE EXAMPLE:
+ ./pupwm [OPTION] ...
+
+REQUIRED OPTIONS :
+	 -i	string	Set input pileup
+	--hw	int+>0	Half-window
+	--s	int+>1	Step
+	 
+FACULTATIVE OPTIONS :
+	-o	string	Output rootname (by default : same as input)
+	--sp	hs|mm	Species (homo sapiens | mus musculus)
+	--notri	flag	Do not output triangular averaging results
+	--norec	flag	Do not output rectangular averaging results
+	--noX	flag	Discard information for chrX
+	--noY	flag	Discard information for chrY
+	--nc	flag	Keep non-canonical chromosomes information
+
+EXAMPLES :
+ ./pupwm -i myinput.pileup -o myoutput --hw 50 -s 25 --sp hs --noX --noY --nc
+
+NOTA 1 :
+ By default, the script writes 2 output files, one with rectangular averaging
+ of number of reads per window, the other with triangular averaging. Each can
+ be discarded by the "--norect" and "--notri" options, respectively. There is
+ no interest in activating both flags at the same time, obviously...
+
+NOTA 2 :
+ "Non-canonical chromosomes" are any string not in the range of chr1..chrY (by
+ example, "chrM" or "chr6_random").
+
+';
+	exit;
+}
+
+my %opts = ('hw' => 0, 's' => 1, 'sp' => 'hs');
+GetOptions(\%opts, 'i=s', 'hw=i', 's=i', 'o=s', 'sp=s', 'notri!', 'norec!', 'noX!', 'noY!', 'nc!');
+if (!$opts{'o'}) { $opts{'o'} = $opts{'i'}; }
+
+my $ofile = $opts{'o'};
+$ofile =~ s/\.pileup$//i;
+$ofile .= '.'.join('', 'hw', $opts{'hw'}, 's', $opts{'s'});
+
+print "\nInput file :\t".$opts{'i'}."\nOutput file :\t".$ofile."\nHalf-window :\t".$opts{'hw'}."\nStep :\t\t".$opts{'s'};
+if (!$opts{'notri'}) { print "\nTriangular smoothing output requested."; }
+if (!$opts{'norec'}) { print "\nRectangular smoothing output requested."; }
+if ($opts{'noX'}) { print "\nChrX will be discarded."; }
+if ($opts{'noY'}) { print "\nChrY will be discarded."; }
+if (!$opts{'nc'}) { print "\nNon-canonical chromosomes will be discarded (ChrM, randoms, etc...)."; } else { print "\nWARNING : Any string in the Chr field will be kept."; }
+print "\n";
+
+## Checking output types
+if ( ($opts{'notri'}) and ($opts{'norec'}) ) {
+	print "\nSTOPPED : Neither triangular nor rectangular smoothing requested!\n";
+	exit;
+}
+
+
+## Building weights for the triangular averageing, on a basis of a 2x weight for the center.
+my $wwidth = 2*$opts{'hw'}+1;
+my $wmax = 2;
+my @weights=();
+foreach my $x (0..(2*$opts{'hw'})) {
+	my $wei = ($wmax-(($wmax/($opts{'hw'}+1))*abs($opts{'hw'}-$x)));
+	push @weights, $wei;
+}
+
+
+################### START : REWRITE with handling of true step
+my $lc = 0;		## Line counter (counts the number of parsed lines from the input source (incremental)
+my $ntf=0;		## Former nucleotide position (incremental to detect gaps)
+my $chrf='';		## Former chromosome (to detect chr changes)
+my $nextstep=0;		## Position of the next reached step
+my @vkeys = qw{chrA pos base count};
+my %vstor = ();		## Storage object for vertical input data (temporal, somehow transposed object of the input)
+
+## USEFULL HASHES
+my %chrom2chr = (	'hs' => { 'chr1' => 1, 'chr2' => 2, 'chr3' => 3, 'chr4' => 4, 'chr5' => 5, 'chr6' => 6, 'chr7' => 7, 'chr8' => 8, 'chr9' => 9, 'chr10' => 10, 'chr11' => 11, 'chr12' => 12, 'chr13' => 13, 'chr14' => 14, 'chr15' => 15, 'chr16' => 16, 'chr17' => 17, 'chr18' => 18, 'chr19' => 19, 'chr20' => 20, 'chr21' => 21, 'chr22' => 22, 'chrX' => 23, 'chrY' => 24 },
+			'mm' => { 'chr1' => 1, 'chr2' => 2, 'chr3' => 3, 'chr4' => 4, 'chr5' => 5, 'chr6' => 6, 'chr7' => 7, 'chr8' => 8, 'chr9' => 9, 'chr10' => 10, 'chr11' => 11, 'chr12' => 12, 'chr13' => 13, 'chr14' => 14, 'chr15' => 15, 'chr16' => 16, 'chr17' => 17, 'chr18' => 18, 'chr19' => 19, 'chrX' => 20, 'chrY' => 21 });
+
+my %chr2chrom = ();
+foreach my $k (keys(%chrom2chr)) {
+	foreach my $c (keys(%{$chrom2chr{$k}})) {
+		$chr2chrom{$k}{$c} = $c;
+	}
+}
+
+## SUBS
+## Load current line into vstor
+sub vload {
+	my @vt = @_;
+	foreach my $v (0..$#vkeys) { push @{$vstor{$vkeys[$v]}}, $vt[$v]; }
+	if (scalar(@{$vstor{'pos'}}) == 2*$opts{'hw'}+1) {
+		if ($ntf == $nextstep+$opts{'hw'}) { &stepwise(\%vstor); }
+		&vshift(\%vstor);
+	}
+}
+
+## Shift vector if needed;
+sub vshift {
+	my %vt = %{shift()};
+	foreach my $v (0..$#vkeys) { shift @{$vstor{$vkeys[$v]}}; }
+}
+
+## Performs everything needed if step is reached;
+sub stepwise {
+	my %vt = %{shift()};
+	my $ravg = '';
+	my $tavg = '';
+	if ($opts{'m'} eq 'rectangular') {  } elsif ($opts{'m'} eq 'triangular') {  }
+	my $start = ${$vt{'pos'}}[0];
+	my $end = ${$vt{'pos'}}[$#{$vt{'pos'}}];
+	my ($gccount, $bcount, $gcrate) = (0, 0, 0);
+	my $gcword = join('', @{$vt{'base'}});
+	$gccount++ while $gcword =~ /[CG]/gi;
+ 	$bcount++ while $gcword =~ /[CGAT]/gi;
+#  	if ($bcount == 0) { $gcrate = 0; } else { $gcrate = sprintf("%.2f", $gccount/$bcount); }
+ 	if ($bcount == 0) { $gcrate = 0; } else { $gcrate = $gccount/$bcount; }
+	
+	if (!$opts{'notri'}) {
+		$tavg = sprintf("%.2f", &tri_avg( [ @{$vt{'count'}} ], [ @weights ] ));
+		print TOUT join("\t", $chrf, $chrom2chr{$opts{'sp'}}{$chrf}, $start, $end, $nextstep, $tavg, $gccount, $bcount, $gcrate)."\n";
+	}
+	if (!$opts{'norec'}) {
+		$ravg =  &rec_avg( @{$vt{'count'}} );
+		print ROUT join("\t", $chrf, $chrom2chr{$opts{'sp'}}{$chrf}, $start, $end, $nextstep, $ravg, $gccount, $bcount, $gcrate)."\n";
+	}
+	$nextstep += $opts{'s'};
+}
+## Triangular averaging
+sub tri_avg {
+	my @recup = @_;
+	my @valz = @{$recup[0]};
+	my @weightz = @{$recup[1]};
+	my $totcount = 0;
+	foreach my $c (0..$#valz) {
+		$totcount += ($valz[$c] * $weightz[$c]);
+	}
+	return ($totcount / (scalar(@valz)+1));
+}
+## Rectangular averaging
+sub rec_avg {
+	my @valz = shift;	# values
+	my $totcount = 0;
+	foreach (@valz) {
+		$totcount += $_;
+	}
+	return ($totcount / scalar(@valz));
+}
+
+
+## ON YOUR MARKS... SET... GO !
+
+open PUP, $opts{'i'} or die $!;
+
+my $tfile = $ofile;
+my $rfile = $ofile;
+$rfile .= 'r';
+$tfile .= 't';
+
+if (!$opts{'notri'}) {
+	open TOUT, ">".$tfile or die $!;
+	print TOUT join("\t", qw{Chr ChrN Start End Center Avg.Norm.Reads GC.num ATGC.num GC.rate})."\n";
+}
+if (!$opts{'norec'}) {
+	open ROUT, ">".$rfile or die $!;
+	print ROUT join("\t", qw{Chr ChrN Start End Center Avg.Norm.Reads GC.num ATGC.num GC.rate})."\n";
+}
+
+while (my $l  = <PUP>) {
+	$l =~ s/\n//;
+	$l =~ s/\r//;
+	my @temp = split /\t/, $l;
+	
+	## Conditional filtering of unsupported chromosomes (chrM, randoms, ...)
+	if ( ($opts{'nc'}) and (!$chrom2chr{$opts{'sp'}}{$temp[0]}) ) { next; }
+	
+	## Conditional filtering of chrX
+	if ( ($opts{'noX'}) and ($temp[0] eq 'chrX') ) { next; }
+	
+	## Conditional filtering of chrY
+	if ( ($opts{'noY'}) and ($temp[0] eq 'chrY') ) { next; }
+	
+	$lc++;
+	if ($lc % 1E+06 == 0) { print "\r".'Processed '.sprintf("%.2e", $lc).' bases...'; }
+	
+	## CASE OF very first line;
+	if ($ntf == 0) {
+		&vload(@temp[0..3]);
+		$chrf = $temp[0];
+		$ntf = $temp[1];
+# 		$nextstep = $ntf+2*$opts{'hw'}+1;
+		$nextstep = $ntf+$opts{'hw'};
+		print "\n".'STARTED at '.$chrf.':'.$ntf.' -> '.$nextstep."\n";
+		next;
+	}
+	
+	## CASE OF chr change
+	if ($temp[0] ne $chrf) {
+		print "\r".'Changed '.$chrf.' to '.$temp[0];
+		%vstor = ();		## temp : freeing vstor
+		&vload(@temp[0..3]);
+		$chrf = $temp[0];
+		$ntf = $temp[1];
+# 		$nextstep = $ntf+(2*$opts{'hw'})+1;
+		$nextstep = $ntf+$opts{'hw'};
+		print "; so ".$ntf." -> ".$nextstep;
+		## LOAD
+		next;
+	}
+	
+	## If the current line is NOT the +1 of the preceading : we have a gap to fill...
+	if ($temp[1] > $ntf+1) {
+		while ($ntf < $temp[1]) {
+			&vload($chrf, $ntf+1, 'N', 0);
+			$ntf++;
+		}
+		&vload(@temp[0..3]);
+		$ntf = $temp[1];
+		next;
+	}
+	## General case
+	&vload(@temp[0..3]);
+	$ntf = $temp[1];
+}
+
+close TOUT;
+close ROUT;
+
+

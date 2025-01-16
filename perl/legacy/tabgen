@@ -1,0 +1,1568 @@
+#!/usr/bin/perl
+use strict;
+
+
+my $version = '1.9.0b 20180517';
+
+## DESCRIPTION
+##
+## . This script generates all the tables needed for classical population CGH array analysis.
+## . Main features : modularity, interspecies compatibility, speed, reliable (as far as possible).
+##
+## VERSION NOTES
+##
+## 1.9.0b 20180517
+##	. Modified loading of HGNC Hugo source file (format changed).
+##
+## 1.9.0 20171201
+##	. Trying to solve a bug where GISTIC2 segment table had bad end coordinate (always 0).
+##
+## 1.8.0b 20160927
+##	. Removed -db and -annot, replaced by -ldb
+##
+## 1.8.0 20160721
+##	. Added SEG format (a Broad standard) that is very like my LST.
+##	. Added CN format (another Broad standard) that is very like my PROB.
+##
+## 1.7.1e 20141204
+##	. Added a quick'n'dirty patch to support chromosomes naming that keeps 'chr' in mirbase
+##	  source file ONLY FOR hg19 AND hg38 (while all other species and builds have a single
+##	  character). HOW STUPID IT IS _._ !
+##
+## 1.7.1d 20141117
+##	. Corrected a bug in the handling of MIR names from mirBase for rattus norvegicus which
+##	  made the script die in error (bad handling of alphanumerical chr names).
+##
+## 1.7.1c 20141021
+##	. Changed column index for mm gene from the MGI file.
+##	. Corrected a bug where the end of the header line did not appear in non-human species.
+##
+## 1.7.1b 20140623
+##	. Bug corrected : Script constantly warning that '-noX' was active (even if untrue).
+##
+## 1.7.1 20140606
+##	. Added a -noX option similar to -noY, but for chrX. This was required for public
+##	  datasets which hybridization design did not take care of sex-matching for reference.
+##
+## 1.7.0 20140226
+##	. Added support for ratus norvegicus (non-tested yet).
+##	. Currently only rn4 is supported (at of today, rn5 lacks public data information).
+##	. Added support for mm10 (non-tested yet).
+##
+## 1.6.1h 20140226
+##	. Changed source for miRNA to MIRBASE.
+##	. Updated corresponding columns indeces to support this new format.
+##	. Updated DGV data to the new UCSC table name "dgvMerged" (from "dgv")
+##
+## 1.6.1g 20121210
+##	. Restored real values for CNVs (were all @0 since v1.6.1 due to a bug) when the GISTIC2
+##	  mode is not called.
+##
+##
+## 1.6.1f 20121105
+##	. Changed input file reading loops from FOREACH to WHILE, which takes less RAM.
+##
+## 1.6.1e 20120130
+##	. Added a "-nogcnv" option to omit the CNV file for GISTIC, which is very long to create for
+##	  high-density formats. It still is recommanded to generated this file, as it gives finer
+##	  results in GISTIC, this option is just there for quicker results.
+##
+## 1.6.1d 20111222
+##	. Corrected a bug which made the script choose the first available design in design.list
+##	  instead of the most recent one when using -d latest.
+##	. Modified the script to support the given AMADID value with or without its beginning 0.
+##
+## 1.6.1c 20111215
+##	. Corrected a cosmetic bug where the "-l" option was non-effective, as the script first checked
+##	  if CBS files are found (which is not necessary when the "-l" is requested.
+##	. Corrections made to the displayed help.
+##
+## 1.6.1b 20111209
+##	. Added support for the 3rd GISTIC file which is optional for GISTIC2 : *.gistic.cnvs, which is
+##	  a list of probes affected by CNV polymorphisms from the DGV.
+##
+## 1.6.1 20111208
+##	. Added new file formats, for the GISTIC2 MCR discovery tool. Three files can be generated
+##	  using the -gistic option : *.gistic.markers (list of probes in the design),
+##	  *.gistic.segments (a segmentation file, very similar to the LST). For the moment, only these
+##	  two formats out of the possible three are supported.
+##
+## 1.6 20111207
+##	. Added support for the new structure of probes' localization tables : now using the GC files
+##	  from which probes with multiple localizations were removed, instead of Agilent BED files which
+##	  contain these probes, and made a desync with the segmentation results from GC5.8+.
+##	. The script now support designs from the pelican:/db/Agilent/array_design/designs.list file, so
+##	  that no further update of the script itself is required to support new designs.
+##
+## 1.5c 20111114
+##	. Set default proj mountpoint to /mnt/proj.
+##
+## 1.5b 20110916
+##	. Resolved a bug on %chrom2chr which did not handle species well, resulting in an empty "Chrom" column in
+##	  output files.
+##
+## 1.5 20110831
+##	. Added support for mouse (mm9), without annotations for the moment.
+##	. Added custom mount point option and /proj. So now, this script can be executed localy.
+##	. Changed source of miRNA annotations from /db to UCSC tables in /proj/cgh.
+##	. Dropped support for hg17.
+##	. Fixed bug with the CpGislands count.
+##	. Modified the shebang, so that this script can be called from any unix system.
+##	. Corrected a typo in the script description for supported design on array 2x400k_snp,
+##	  which AMADID was erroneous with '028021' instead of '028081'.
+##
+## 1.4f 20110726
+##	. Added support for Human CGH+SNP 2x400K and 4x180K (for hg19 only).
+##
+## 1.4e 20110627
+##	. Added a condition so that all annotations tables opening and filtering is skipped is no annotation is
+##	  requestedin the tables generation. Implies a huge gain of time when no annotation is requested, obviously...
+##
+## 1.4d 20110511
+##	. Modification de la structure du répertoire dans lequel les fichiers de sortie sont écrits. Désormais, tous
+##	  les fichiers seront dans un sous-répertoire supplémentaire "Data/", pour faciliter le déplacement de
+##	  l'ensemble de la structure vers le répertoire du projet dans /ugf/Projets/PXX/PXX_XXXX/04_Bioinformatique/CGH.
+##
+## 1.4c 20110427
+##	. Correction de bug dans le lien vers les données de localisation des CNV, qui était erroné pour le build hg19.
+##
+## 1.4b 20110106
+##	. Légère optimisation des boucles pour les annotations génomiques (~25% + rapide).
+##	. Ajout d'une option pour désactiver la génération du fichier APROB, même quand l'option '-annot' est active,
+##	  car sa génération prend souvent énormément de temps...
+##	. Modification du passage des options : suppression des Y|N, désormais l'option est active sur simple appel
+##	  d'un argument spécifique à chaque format.
+##	. En conséquence, ajout d'une option '-default' qui génèrera les formats : LST, ALST, REG, AREG, XREG, AXREG,
+##	  PROB. Cette option n'est pas prioritaire devant '-all', mais on peut y ajouter d'autres formats.
+##
+## 1.4 20110104
+##	. Ajout des annotations génomiques, sous forme de nouveaux formats de ficher. L'ajout est conditionné par une
+##	  nouvelle option '-annot'. Les nouveaux formats sont:
+##		- ALST (= fichier LST + annotations)
+##		- AREG (= ficher REG + annotations)
+##		- AXREG (= fichier XREG + annotations)
+##		- APROB (= fichier PROB + annotations)
+##
+## 1.3 20100923
+##	. Modification des paths des fichiers de données vers /proj/cgh. L'accès à ces données devient donc public et
+##	  sort de mon home ! (ne pas oublier de chmoder...)
+##
+## 1.2b 20100916
+##	. Modification de la structure des noms de fichier de sortie, dans le but de n'avoir à en écrire que
+##	  le moins possible à la main à l'exécution du script. Devienennt donc automatiques : le build de génome,
+##	  la date et le nombre d'échantillons.
+##
+## 1.2 20100915
+##	. Modification de la gestion des listes et hashes pour libération de mémoire, car 22 profils 1M :
+##	  ça ne passe pas !! (out of memory, c'est bcp moins beau que out of Africa...).
+##
+## 1.1 20100913
+##	. Ajout d'un format 'xreg' correspondant au fichier .reg pour lequel les coordonnées de régions sont étendues
+##	  pour couvrir tout le génome compris entre aberrations différentes consécutives impliquant des sondes
+##	  consécutives. Ce type de fichier est requis pour la corrélation CGH-GE, en l'assumant à une approximation
+##	  supplémentaire du type de résultat apporté par la CGH.
+##
+## 1.0b 20100908
+##	. Correction de bug : gestion de -noY pour le format LST
+##
+## 1.0 20100908
+##	. fichier LST fonctionnel. L'ensemble de la tasklist est complète => passage en v1.0
+##
+## 0.4 20100906
+##	. Modification du support du GCT : 2 fichiers sont désormais créés, un GCT correspondant au PROB, l'autre au REG
+##
+## 0.3b 20100903
+##	. Ajout du support du format GCT (pour GenePattern)
+##	. Support des fichiers STAC
+##
+## 0.3 20100901
+##	. Fichier REG fonctionnel
+##
+## 0.2 20100828
+##	. Fichier PROB fonctionnel
+##
+## 0.1 20100823
+##	. Première version de test
+
+
+
+## Default options
+my $mode = '';
+my $sp = 'hs';
+my $gb = 19;
+# my $proj = '/mnt/proj';
+# my $db = '/mnt/db';
+my $ldb = '/mnt/data_cigogne/bioinfo';
+my $desdate = 'latest';
+my $des = 'none';
+my $lst = 'N';
+my $reg = 'N';
+my $xreg = 'N';
+my $prob = 'N';
+my $gct = 'N';
+my $stac = 'N';
+my $gistic = 'N';
+my $seg = 'N';
+my $cn = 'N';
+my $nogcnv = 'N';
+my $all = 'N';
+my $noX = 'N';
+my $noY = 'N';
+my $annot = 'N';
+my $noaprob = 'N';
+my $outroot = 'output';
+
+my %gvcheck = ( 'hg17' => 17, 'hg18' => 18, 'hg19' => 19, 'hg38' => 38, 'mm9' => 9, 'mm10' => 10, 'rn4' => 4);
+
+## Help zone
+if (scalar(@ARGV) == 0) {
+	print '
+TABGEN v'.$version.'
+ for TABles GENerator.
+
+USAGE:
+. To generate tables :
+"tabgen [CBS files] -a [AMADID] -d [designdate] -o [name] -sp [hs|mm|rn] -gb [18|19|38|9|10|4] -lst -seg -reg -xreg -prob -cn -stac -gistic -nogcnv -gct -all -annot -noaprob -default -noY -ldb [path]"
+. Or, to get the current list of available designs for CGH :
+"tabgen -l"
+
+REQUIRED ARGUMENTS :
+	[CBS files]	*.cbs files generated by GC5.
+	-a		AMADID of the design to use.
+	-d		Design date (YYYYMDD). ['.$desdate.']
+	-o		An output filename root base (string).
+	-sp		Species ['.$sp.']
+	-gb		Genome build ['.$gb.']
+
+FACULTATIVE ARGUMENTS :
+	-lst	Generate the global aberations list.
+	-seg	A Broad standard like the LST format.
+	-reg	Generate the region-level table.
+	-xreg	A variation on the .reg file format. This file keeps the very same
+		format but the coordinates of regions are changed to cover the maximum
+		part of the genome. It only applies to successive different aberrations
+		that imply consectuve probes.
+	-prob	Generate the probe-level for the given format.
+	-cn	A Broad standard like the PROB format.
+	-stac	Generate files to be used with STAC v1.2.
+	-gistic Generate files to be used with GISTIC2.
+	-nogcnv	Do not generate the CNV file for GISTIC2 (faster).
+	-gct	Generate GCT-type tables (needed by GenePattern for NMFConsensus
+		clustering). If active, a GCT-type table is generated for the "reg",
+		"xreg" and/or "prob" types of table (if active).
+	-all	Generate all possible file formats. Overrides any of the
+		-lst, -reg, -prob, -gct options.
+	-annot	Add genomic annotations to the output regions. These annotations are
+		genes, CNVs, miRNA and CPGisl informations.
+	-noaprob	Does not generate the APROB file format even if "-annot" is called.
+	-default	Generates the default formats : LST, REG, AREG, XREG, AXREG, PROB.
+	-noX	Skip probes from the chrX.
+	-noY	Skip probes from the chrY.
+	-ldb	Path to a local data base. ['.$ldb.']
+
+NOTA :
+AMADID should be given without its first "zero"...
+
+';
+	exit;
+}
+
+
+## SUBFUNCTIONS
+sub transmat {
+	my @t1 = @_;
+	my @t2=();
+	foreach my $j (0..$#{$t1[0]}) {
+		push @t2, [ map $_->[$j], @t1 ];
+	}
+	delete @t1[0..$#t1];
+	return @t2;
+}
+
+
+
+## Parsing arguments
+chomp($ARGV[$#ARGV]);
+
+
+foreach my $ar (0..$#ARGV) {
+	chomp $ARGV[$ar];
+	if ($ARGV[$ar] eq '-l') { $mode = 'dlist'; }
+	if ($ARGV[$ar] eq '-sp') { $sp = $ARGV[$ar+1]; }
+	if ($ARGV[$ar] eq '-gb') { $gb = $ARGV[$ar+1]; }
+	if ($ARGV[$ar] eq '-o') { $outroot = $ARGV[$ar+1]; }
+	if ($ARGV[$ar] eq '-a') { $des = $ARGV[$ar+1]; }
+	if ($ARGV[$ar] eq '-d') { $desdate = $ARGV[$ar+1]; }
+	if ($ARGV[$ar] eq '-lst') { $lst = 'Y'; }
+	if ($ARGV[$ar] eq '-seg') { $seg = 'Y'; }
+	if ($ARGV[$ar] eq '-reg') { $reg = 'Y'; }
+	if ($ARGV[$ar] eq '-xreg') { $xreg = 'Y'; }
+	if ($ARGV[$ar] eq '-prob') { $prob = 'Y'; }
+	if ($ARGV[$ar] eq '-cn') { $cn = 'Y'; }
+	if ($ARGV[$ar] eq '-gct') { $gct = 'Y'; }
+	if ($ARGV[$ar] eq '-stac') { $stac = 'Y'; }
+	if ($ARGV[$ar] eq '-gistic') { $gistic = 'Y'; }
+	if ($ARGV[$ar] eq '-nogcnv') { $nogcnv = 'Y'; }
+	if ($ARGV[$ar] eq '-noX') { $noX = 'Y'; }
+	if ($ARGV[$ar] eq '-noY') { $noY = 'Y'; }
+	if ($ARGV[$ar] eq '-annot') { $annot = 'Y' }
+	if ($ARGV[$ar] eq '-ldb') { $ldb = $ARGV[$ar+1]; }
+#	if ($ARGV[$ar] eq '-proj') { $proj = $ARGV[$ar+1]; }
+#	if ($ARGV[$ar] eq '-db') { $db = $ARGV[$ar+1]; }
+	if ($ARGV[$ar] eq '-default') { 
+		$lst = 'Y';
+		$reg = 'Y';
+		$xreg = 'Y';
+		$prob = 'Y';
+		$annot = 'Y';
+		$noaprob = 'Y';
+	}
+	if ($ARGV[$ar] eq '-all') {
+		$lst = 'Y';
+		$seg = 'Y';
+		$reg = 'Y';
+		$xreg = 'Y';
+		$prob = 'Y';
+		$cn = 'Y';
+		$gct = 'Y';
+		$stac = 'Y';
+		$gistic = 'Y';
+		$annot = 'Y';
+	}
+	if ($ARGV[$ar] eq '-noaprob') { $noaprob = 'Y'; }
+}
+
+my @cbsls = (<$ARGV[0]>);
+## Check if CBS are found.
+if (((scalar(@cbsls) == 0) or ($cbsls[0] !~ /.cbs$/)) and ($mode ne 'dlist')) {
+	die "\nNo CBS file(s) found/given !\n\n";
+}
+
+
+## DLIST MODE
+if ($mode eq 'dlist') {
+	print "\nAvailable CGH designs :\n";
+	open DL, $ldb."/Agilent/array_design/designs.list" or die $!;
+	while (my $l = <DL>) {
+		$l =~ s/\n//;
+		$l =~ s/\r//;
+		my @temp = split "\t", $l;
+		if ((lc($temp[1]) eq 'cgh') or ($l =~ /^AMADID\t/)) {
+			print join("  ", sprintf("%-6s", $temp[0]), sprintf("%-10s", $temp[1]), sprintf("%-6s", $temp[2]), sprintf("%-7s", $temp[3]), sprintf("%-12s", $temp[4]), sprintf("%-11s", $temp[5]), $temp[6])."\n";
+		}
+	}
+	close DL;
+	print "\n";
+	exit;
+}
+
+
+# REQUIRED DATA
+
+## Official symbols lists
+my %offsympath = (	'hs' =>		$ldb.'/HGNC/HGNC_Hugo.txt',
+			'mm' =>		$ldb.'/MGI/MGI_MRK_List2.rpt',
+			'rn' =>		$ldb.'/RGD/RGD_GENES_RAT.txt');
+
+
+## UCSC Cytobands datafiles
+my %cytopath = (	'hg18' =>	$ldb.'/GoldenPath/hg18/cytoBandIdeo.hg18',
+			'hg19' =>	$ldb.'/GoldenPath/hg19/cytoBandIdeo.hg19',
+			'hg38' =>	$ldb.'/GoldenPath/hg19/cytoBandIdeo.hg38',
+			'mm9' =>	$ldb.'/GoldenPath/mm9/cytoBandIdeo.mm9',
+			'mm10' =>	$ldb.'/GoldenPath/mm10/cytoBandIdeo.mm10',
+			'rn4' =>	$ldb.'/GoldenPath/rn4/cytoBandIdeo.rn4');
+
+## UCSC knownGene datafiles
+my %kgh = (	'hg18' =>	$ldb.'/GoldenPath/hg18/knownGene.hg18',
+		'hg19' =>	$ldb.'/GoldenPath/hg19/knownGene.hg19',
+		'hg38' =>	$ldb.'/GoldenPath/hg19/knownGene.hg38',
+		'mm9' =>	$ldb.'/GoldenPath/mm9/knownGene.mm9',
+		'mm10' =>	$ldb.'/GoldenPath/mm10/knownGene.mm10',
+		'rn4' =>	$ldb.'/GoldenPath/rn4/rgdGene2.rn4');
+
+my %kgXh = (	'hg18' =>	$ldb.'/GoldenPath/hg18/kgXref.hg18',
+		'hg19' =>	$ldb.'/GoldenPath/hg19/kgXref.hg19',
+		'hg38' =>	$ldb.'/GoldenPath/hg19/kgXref.hg38',
+		'mm9' =>	$ldb.'/GoldenPath/mm9/kgXref.mm9',
+		'mm10' =>	$ldb.'/GoldenPath/mm10/kgXref.mm10',
+		'rn4' =>	$ldb.'/GoldenPath/rn4/rgdGene2Xref.rn4');
+
+my %DGVfilehash = (	'hg18' =>	$ldb.'/GoldenPath/hg18/dgvMerged.hg18',
+			'hg19' =>	$ldb.'/GoldenPath/hg19/dgvMerged.hg19');
+
+## SuperDups CNV datafile * MOUSE ONLY*
+# my %SDfilehash = (	'mm9' =>	$proj.'/cgh/mm9/genomicSuperDups.mm9'	);
+
+## Microsatellites for non-human species
+my %MSfilehash = (	'mm9' =>	$ldb.'/GoldenPath/mm9/microsat.mm9',
+			'mm10' =>	$ldb.'/GoldenPath/mm10/microsat.mm10',
+			'rn4' =>	$ldb.'/GoldenPath/rn4/microsat.rn4');
+
+## mirDB datafiles (from UCSC tables)
+my %MIRfilehash = (	'hg18' =>	$ldb.'/GoldenPath/hg18/hsa.gff_mirna_miRBasev13.hg18',
+			'hg19' =>	$ldb.'/GoldenPath/hg19/hsa.gff3_mirna_miRBasev20.hg19',
+			'mm9' =>	$ldb.'/GoldenPath/mm9/mmu.gff3_mirna_miRBasev18.mm9',
+			'mm10' =>	$ldb.'/GoldenPath/mm10/mmu.gff3_mirna_miRBasev20.mm10',
+			'rn4' =>	$ldb.'/GoldenPath/rn4/rno.gff3_mirna_miRBasev20.rn4');
+
+## UCSC CPGislands datafiles
+my %CPGfilehash = (	'hg18' =>	$ldb.'/GoldenPath/hg18/cpgIslandExt.hg18',
+			'hg19' =>	$ldb.'/GoldenPath/hg19/cpgIslandExt.hg19',
+			'mm9' =>	$ldb.'/GoldenPath/mm9/cpgIslandExt.mm9',
+			'mm10' =>	$ldb.'/GoldenPath/mm10/cpgIslandExt.mm10',
+			'rn4' =>	$ldb.'/GoldenPath/rn4/cpgIslandExt.rn4');
+
+## CHROM to CHR converter
+my %chrom2chr = (	'hs' =>	{ 'chr1' => 1, 'chr2' => 2, 'chr3' => 3, 'chr4' => 4, 'chr5' => 5, 'chr6' => 6, 'chr7' => 7, 'chr8' => 8, 'chr9' => 9, 'chr10' => 10, 'chr11' => 11, 'chr12' => 12, 'chr13' => 13, 'chr14' => 14, 'chr15' => 15, 'chr16' => 16, 'chr17' => 17, 'chr18' => 18, 'chr19' => 19, 'chr20' => 20, 'chr21' => 21, 'chr22' => 22, 'chrX' => 23, 'chrY' => 24 },
+			'mm' =>	{ 'chr1' => 1, 'chr2' => 2, 'chr3' => 3, 'chr4' => 4, 'chr5' => 5, 'chr6' => 6, 'chr7' => 7, 'chr8' => 8, 'chr9' => 9, 'chr10' => 10, 'chr11' => 11, 'chr12' => 12, 'chr13' => 13, 'chr14' => 14, 'chr15' => 15, 'chr16' => 16, 'chr17' => 17, 'chr18' => 18, 'chr19' => 19, 'chrX' => 20, 'chrY' => 21 },
+			'rn' =>	{ 'chr1' => 1, 'chr2' => 2, 'chr3' => 3, 'chr4' => 4, 'chr5' => 5, 'chr6' => 6, 'chr7' => 7, 'chr8' => 8, 'chr9' => 9, 'chr10' => 10, 'chr11' => 11, 'chr12' => 12, 'chr13' => 13, 'chr14' => 14, 'chr15' => 15, 'chr16' => 16, 'chr17' => 17, 'chr18' => 18, 'chr19' => 19, 'chr20' => 20, 'chrX' => 21 }	);
+
+## CHR to CHROM converter
+my %chr2chrom = ();
+foreach my $s (keys(%chrom2chr)) {
+	foreach my $c (keys(%{$chrom2chr{$s}})) {
+		$chr2chrom{$s}{$chrom2chr{$s}{$c}} = $c;
+	}
+}
+
+## Species converter (needed to transform 'hs' and '19' to 'hg19', by example)
+my %spconv = ('hs' => 'hg', 'mm' => 'mm', 'rn' => 'rn');
+my %splong = ('hs' => 'homo_sapiens', 'mm' => 'mus_musculus', 'rn' => 'rattus_norvegicus');
+
+## Header's end
+my @acn = ();
+if ($sp eq 'hs') { @acn = ('Genes', 'miRNA', 'CpGislands', 'CNV'); }
+elsif ($sp !~ 'hs') { @acn = ('Genes', 'miRNA', 'CpGislands', 'Microsat'); }
+ 
+
+
+######################
+## ARGUMENTS CHECKS ##
+######################
+
+## CHECK on input files
+if (scalar(@cbsls) > 0) {
+	print "\nCBS files found : ".scalar(@cbsls)."\n";
+	$outroot .= '_'.scalar(@cbsls).'s';
+}
+else { die "\nERROR : Can't find any input file !\n\n" };
+
+## Check on species and genome build combo
+my $gv = $spconv{lc($sp)}.$gb;
+if (!exists $gvcheck{$gv}) {
+	die "\nERROR : Unknown species or genome build !\n";
+}
+else {
+	print "\nWorking on ".$gv."\n";
+	$outroot .= '_'.$gv;
+}
+
+## Filtering the starting 0 on the AMADID.
+if ($des =~ /^0[0-9]{5}/) {
+	$des =~ s/^0//;
+}
+
+## Ajout de la date
+my @curdate = localtime(time);
+$outroot .= '_'.join('', ($curdate[5]+1900), sprintf("%02d", $curdate[4]+1), sprintf("%02d", $curdate[3]));
+
+
+## CHECK chrX
+if ($noX eq 'Y') {
+	print "WARNING : chrX will be discarded !\n";
+	$outroot.= '_noX';
+}
+## CHECK chrY
+if ($noY eq 'Y') {
+	print "WARNING : chrY will be discarded !\n";
+	$outroot.= '_noY';
+}
+
+## LOOKING FOR THE DEFINED DESIGN
+print "Reading the designs list ...\n";
+my $founddd=0;
+my @founddl=();
+# open DL, $db."/Agilent/array_design/designs.list" or die $!;
+open DL, $ldb."/Agilent/array_design/designs.list" or die $!;
+while (my $l = <DL>) {
+	$l =~ s/\n//;
+	$l =~ s/\r//;
+	my @temp = split /\t/, $l;
+	if ((lc($temp[1]) eq 'cgh') and ($temp[0] == $des) and ($temp[3] eq $sp) and ($temp[4] == $gb)) {
+		if ($desdate eq 'latest') {
+			push @founddl, [ @temp ];
+		}
+		elsif ($desdate == $temp[5]) {
+			$founddd = $temp[5];
+			last;
+		}
+	}
+}
+close DL;
+if ($desdate eq 'latest') {
+	if (scalar(@founddl) == 1) {
+		$founddd = $founddl[0][5];
+	}
+	elsif (scalar(@founddl) > 1) {
+		foreach my $f (0..$#founddl) {
+			if ($founddl[$f][5] > $founddd) {
+				$founddd = $founddl[$f][5];
+			}
+		}
+	}
+	else {
+		print "\n".join("\n\t", "Could not find the latest design for the given set of parameters :", "Technology :\tCGH", "AMADID :\t0".$des, "Species :\t".$sp, "Genome.build :\t".$gb)."\n\n";
+		exit;
+	}
+	print "Found most recent design date : ".$founddd."\n";
+}
+## Check if design date is found :
+if ($founddd == 0) {
+	print "\n".join("\n\t", "Could not find the latest design for the given set parameters :", "Technology :\tCGH", "AMADID :\t0".$des, "Species :\t".$sp, "Genome build :\t".$gb, "Design date :\t".$desdate)."\n\n";
+	exit;
+}
+## Else : everything is fine
+$desdate = $founddd;
+
+## CREATING DESIGN FILENAME STRUCTURE
+my $desfn = "0".join("_", $des, "D_BED", $desdate, $gv).".gc";
+
+## LOADING DESIGN
+print "Loading design data from ".$desfn." ...\n";
+my @desp=();
+# open DES, $proj."/cgh/Agilent/".$splong{$sp}."/".$gv."/".$desfn or die $!;
+open DES, $ldb."/Agilent/GCdata/".$splong{$sp}."/".$gv."/".$desfn or die $!;
+while (my $l = <DES>) {
+	$l =~ s/\n//;
+	$l =~ s/\r//;
+	my @temp = split /\t/, $l;
+	if ($l !~ /^Identifier/) {
+		if (($noX eq 'Y') and ($temp[1] eq 'chrX')) {
+			next;
+		}
+		if (($noY eq 'Y') and ($temp[1] eq 'chrY')) {
+			next;
+		}
+		push @{$desp[$temp[2]-1]}, [ @temp[0..4] ];
+	}
+}
+close DES;
+
+## SORTING ACCORDING TO CHR > START > END
+## AND CREATING THE PROBE INDEX NEEDED BY THE XREG FORMAT
+# my $ik=0;
+my %iprob=();
+my $nprob=0;
+foreach my $k (0..$#desp) {
+	@{$desp[$k]} = sort { ${$a}[3] <=> ${$b}[3] || ${$a}[4] <=> ${$b}[4] } @{$desp[$k]};
+	foreach my $p (0..$#{$desp[$k]}) {
+		$nprob++;
+		$iprob{$desp[$k][$p][0]} = $nprob;
+	}
+}
+
+
+## IMPORTING SAMPLES DATA FROM .CBS FILES
+my @samples=();
+my %sampash=();
+foreach my $cbs (@cbsls) {
+	$cbs =~ s/\n//;
+	$cbs =~ s/\r//;
+	open IN, $cbs or die $!;
+	my @incbs = <IN>;
+	close IN;
+	foreach my $l (@incbs) {
+		$l =~ s/\n//;
+		$l =~ s/\r//;
+		my @temp = split /\t/, $l;
+		if ($l =~ /chr\tstart\tend/i) {
+			push @samples, $temp[0];
+		}
+		else {
+			push @{$sampash{$samples[$#samples]}}, [ @temp ];
+		}
+	}
+}
+
+###########################
+### CYTOBANDS BLOCK START #
+###########################
+## IMPORTING CYTOBANDS;
+my @cytob=();
+# 	print "\n".$cytopath{$gv}."\n";
+open CYTO, $cytopath{$gv} or die $!;
+foreach (<CYTO>) {
+	$_ =~ s/\n//;
+	$_ =~ s/\r//;
+	if ($_ !~ /^\#/) {
+		my @temp = split /\t/, $_;
+		my $chr = $chrom2chr{$sp}{$temp[0]};
+		push @{$cytob[$chr-1]}, [ @temp ];
+	}
+}
+close CYTO;
+
+#########################
+### CYTOBANDS BLOCK END #
+#########################
+
+my @genarray=();
+my @mirarray=();
+my @cpgarray=();
+my @cnvarray=();
+
+if ($annot eq 'Y') {
+
+	#############################
+	### GENEBLOCK CLUSTER START #
+	#############################
+	## Importing UCSC knownGene
+	print "Importing knownGene data ...\n";
+	my %ucsc = ();
+	open KGIN, $kgh{$gv} or die $!;
+	while (my $k = <KGIN>) {
+		$k =~ s/\n//;
+		$k =~ s/\r//;
+		if ($k !~ /^\#/) {
+			my @temp = split /\t/, $k;
+			if ($temp[1] =~ /^chr([0-9]+|X|Y)$/) {
+				$ucsc{$temp[0]} = [ $chrom2chr{$sp}{$temp[1]}, @temp[3,4] ];		## chr, TXstart, TXend
+			}
+		}
+	}
+	close KGIN;
+	print "\tfound ".keys(%ucsc)." UCSC clean kG transcripts.\n";
+
+	## IMPORTING OFFICIAL SYMBOLS
+	## For homo sapiens
+	my %offsymb=();
+	print "Importing official symbols ";
+	## Importing Hugo symbols for hs
+	if ($sp eq 'hs') {
+		print "from HGNC Hugo fur homo sapiens...\n";
+		open HGNC, $offsympath{$sp} or die $!;
+		while (my $h = <HGNC>)  {
+			$h =~ s/\n//;
+			$h =~ s/\r//;
+			if ($h !~ /^hgnc_id/) {
+				my @temp = split /\t/, $h;
+				if ($temp[5] eq 'Approved') {
+					$offsymb{$temp[1]} = $temp[2];
+				}
+			}
+		}
+		close HGNC;
+	}
+	## For mus musculus
+	elsif ($sp eq 'mm') {
+		print "from MGI for mus musculus...\n";
+		open MGI, $offsympath{$sp} or die $!;
+		while (my $h = <MGI>)  {
+			$h =~ s/\n//;
+			$h =~ s/\r//;
+			if ($h !~ /^MGI Accession ID/) {
+				my @temp = split /\t/, $h;
+# 				if ($temp[12] eq 'Gene') {
+				if ($temp[9] eq 'Gene') {
+					$offsymb{$temp[6]} = $temp[8];	## $hgnc{SYMBOL} = DESCRIPTION
+				}
+			}
+		}
+		close MGI;
+	}
+	elsif ($sp eq 'rn') {
+		print "from RGD for rattus norvegicus...\n";
+		open RGD, $offsympath{$sp} or die $!;
+		while (my $h = <RGD>)  {
+			$h =~ s/\n//;
+			$h =~ s/\r//;
+			if ($h !~ /^\#/) {
+				my @temp = split /\t/, $h;
+				$offsymb{$temp[1]} = $temp[3];	## $hgnc{SYMBOL} = DESCRIPTION
+			}
+		}
+		close RGD;
+	}
+	
+	
+	print "\tfound ".keys(%offsymb)." official symbols.\n";
+
+	## Importing UCSC kgXref to cross official symbols and UCSC localizations
+	print "Importing kgXref data ...\n";
+	my %ucscX = ();
+	my $tx_idx = 0;
+	my $symbol_idx = 4;
+	if ($sp eq 'rn') {
+		$symbol_idx = 2;
+	}
+	open KGXIN, $kgXh{$gv} or die $!;
+	while (my $k = <KGXIN>) {
+		$k =~ s/\n//;
+		$k =~ s/\r//;
+		if ($k !~ /^\#/) {
+			my @temp = split /\t/, $k;
+			if ( (exists $ucsc{$temp[$tx_idx]}) and (exists($offsymb{$temp[$symbol_idx]})) ) {
+				push @{$ucscX{$temp[$symbol_idx]}}, [ (@{$ucsc{$temp[$tx_idx]}}, $offsymb{$temp[$symbol_idx]}) ];		## chr, TXstart, TXend
+			}
+		}
+	}
+	close KGIN;
+	print "\tlocalized ".keys(%ucscX)." approved symbols.\n";
+
+	## As UCSC minimal data are transcripts, we must clusterize them to get the genomic coordinates
+	print "Clusterizing transcripts ...\n";
+	my %genhash=();
+	foreach my $sym (keys %ucscX) {
+		if (scalar @{$ucscX{$sym}} == 1) {
+			$genhash{$sym} = [ @{$ucscX{$sym}} ];
+		}
+		else {
+			my @tempo=();
+			my @curlocz = @{$ucscX{$sym}};
+			## Tri de @curlocz par chr croissants, puis start croissants, puis end décroissants;
+			@curlocz = sort { ${$a}[0] <=> ${$b}[0] || ${$a}[1] <=> ${$b}[1] || ${$b}[2] <=> ${$a}[2] } @curlocz;
+			push @tempo, [ @{$curlocz[0]}];
+			foreach my $x (0..$#curlocz) {
+				my $inflag=0;
+				foreach my $y (0..$#tempo) {
+					if ( (${$curlocz[$x]}[0] == ${$tempo[$y]}[0]) and (${$curlocz[$x]}[1] <= ${$tempo[$y]}[2]) and (${$curlocz[$x]}[2] >= ${$tempo[$y]}[1]) ) {
+						$inflag++;
+						if (${$curlocz[$x]}[1] <= ${$tempo[$y]}[1]) {
+							${$tempo[$y]}[1] = ${$curlocz[$x]}[1];
+						}
+						if (${$curlocz[$x]}[2] >= ${$tempo[$y]}[2]) {
+							${$tempo[$y]}[2] = ${$curlocz[$x]}[2] ;
+						}
+					}
+				}
+				if ($inflag == 0) {
+					push @tempo, [ @{$curlocz[$x]} ];
+				}
+			}
+			$genhash{$sym} = [ @tempo ];
+		}
+	}
+
+	## Crossing genes and localizations
+	# my @genarray=();
+	foreach my $sym (sort(keys(%genhash))) {
+		foreach my $x (0..$#{$genhash{$sym}}) {
+			push @{$genarray[${${$genhash{$sym}}[$x]}[0] - 1]}, [ ($sym, @{${$genhash{$sym}}[$x]}) ];
+		}
+	}
+
+
+	## Creating another hash with a concatenation of symbol.chr.start.end as key
+	my %genlochash = ();
+	foreach my $k (0..$#genarray) {
+		foreach my $c (0..$#{$genarray[$k]}) {
+			$genlochash{join('', @{${$genarray[$k]}[$c]}[0..3])} = [ @{${$genarray[$k]}[$c]} ];
+		}
+	}
+
+	## Sorting genarray chr blocks according to their chomosomic start
+	print "\tsorting data ...\n";
+	foreach my $g (0..$#genarray) {
+		@{$genarray[$g]} = sort { ${$a}[2] <=> ${$b}[2] } @{$genarray[$g]};
+	}
+
+	###########################
+	### GENEBLOCK CLUSTER END #
+	###########################
+
+
+	####################
+	### MIRBLOCK START #
+	####################
+
+	## LOADING MIRNA DATA
+	my $mircount=0;
+	print "Importing miRNA data ...\n";
+	open MIR, $MIRfilehash{$gv} or die $!;
+	while (my $zm = <MIR>) {
+		$zm =~ s/\n//;
+		$zm =~ s/\r//;
+		if ($zm !~ /^\#/) {
+			my @temp = split /\t/, $zm;
+			my $chrA = $temp[0];
+# 			if (($gv eq 'mm9') or ($gv eq 'hg18')) { $chrA = 'chr'.$chrA; }
+			if ( ($gv ne 'hg19') and ($gv ne 'hg38') ) {$chrA = 'chr'.$chrA;}
+			my $chrN = $chrom2chr{$sp}{$chrA};
+			
+			my $mirid = '';
+			if ($gv eq 'hg18') {
+				$mirid = (split /\;/, $temp[8])[1];
+				$mirid =~ s/\ ID\=//i;
+			} else {
+				$mirid = (split /\;/, $temp[8])[2];
+				$mirid =~ s/Name\=//i;
+			}
+			push @{$mirarray[$chrN-1]}, [ $chrA, @temp[3,4], $mirid, 'NA', $temp[2] ];		# chrA, start, end, name, mirBase-score, type
+			$mircount++;
+		}
+	}
+	close MIR;
+	
+	## Control on file content
+	if (scalar(@mirarray) == 0) {
+		print "\n\tWARNING : No MIRdb info banked ! Problem with the source file ?\n\n";
+	# 	$mirctrl = '<B><I>E!</I></B>';
+	}
+	else { print "\tfound ".$mircount." miRNA.\n"; }
+	## Sorting
+	print "\tsorting data ...\n";
+	foreach my $c (0..$#mirarray) {
+		@{$mirarray[$c]} = sort { ${$a}[1] <=> ${$b}[1] || ${$a}[2] <=> ${$b}[2] } @{$mirarray[$c]};
+	}
+
+	##################
+	### MIRBLOCK END #
+	##################
+
+
+
+	####################
+	### CPGBLOCK START #
+	####################
+	print "Importing CpGislands data ...\n";
+	my $cpgcount=0;
+	open CPG, $CPGfilehash{$gv} or die $!;
+	while (my $zc = <CPG>) {
+		$zc =~ s/\n//;
+		$zc =~ s/\r//;
+		if ($zc !~ /^\#/) {
+			my @temp = split /\t/, $zc;
+			if ( ($sp eq 'hs') and ($gb < 19) ) { unshift(@temp, 'NA'); }
+			if ($temp[1] =~ /^chr([0-9]+|X|Y)$/) {
+				my $chrN = $chrom2chr{$sp}{$temp[1]};
+				push @{$cpgarray[$chrN-1]}, [ @temp[0..$#temp] ];
+				$cpgcount++;
+			}
+		}
+	}
+	close CPG;
+	## Control on file content
+	if (scalar(@cpgarray) == 0) {
+		print "\n\tWARNING : No CpGisland info banked ! Problem with the source file ?\n\n";
+	}
+	else { print "\tfound ".$cpgcount." CpGislands.\n"; }
+	##################
+	### CPGBLOCK END #
+	##################
+	
+	
+	####################
+	### CNVBLOCK START #
+	####################
+
+	## LOADING POLYMORPHISMS DATA
+	## FOR HS : LOADING DGV CNVs DATA
+	my $cnvcount=0;
+	if ($sp eq 'hs') {
+		print "Importing DGV annotations ...\n";
+		open CNV, $DGVfilehash{$gv} or die $!;
+		while (my $zcn = <CNV>) {
+			$zcn =~ s/\n//;
+			$zcn =~ s/\r//;
+			if ($zcn !~ /^\#/) {
+				my @temp = split /\t/, $zcn;
+				my $chrA = $temp[1];
+				my $chrN = $chrom2chr{$sp}{$chrA};
+				$chrA =~ s/chr//;
+# 				push @{$cnvarray[$chrN-1]}, [ $temp[4], $chrA, @temp[2,3,11] ];		## ID, chrA, Start, End, type;
+				push @{$cnvarray[$chrN-1]}, [ $temp[4], $chrA, @temp[2,3,10] ];		## ID, chrA, Start, End, type;
+				$cnvcount++;
+			}
+		}
+		close CNV;
+	}
+	## FOR OTHERS : LOADING MICROSATELLITES
+	else {
+		print "Importing microsatellites annotations ...\n";
+		open SAT, $MSfilehash{$gv} or die $!;
+		while (my $zms = <SAT>) {
+			$zms =~ s/\n//;
+			$zms =~ s/\r//;
+			if ($zms !~ /^\#/) {
+				my @temp = split /\t/, $zms;
+				my $chrA = $temp[1];
+				my $chrN = $chrom2chr{$sp}{$chrA};
+				push @{$cnvarray[$chrN-1]}, [ $temp[4], $chrA, @temp[2,3,4] ];		## ID, chrA, Start, End, type;
+				$cnvcount++;
+			}
+		}
+		close SAT;
+	}
+	
+# 	elsif ($sp eq 'mm') {
+# 		print "Importing SuperDups annotations ...\n";
+# 		open DUP, $SDfilehash{$gv} or die $!;
+# 		while (my $zd = <DUP>) {
+# 			$zd =~ s/\n//;
+# 			$zd =~ s/\r//;
+# 			if ($zd !~ /^\#/) {
+# 				my @temp = split /\t/, $zd;
+# 				my $chrA = $temp[1];
+# 				my $chrN = $chrom2chr{$sp}{$chrA};
+# 				push @{$cnvarray[$chrN-1]}, [ $temp[11], $chrA, @temp[2,3], 'SegDup' ];		## ID, chrA, Start, End, type;
+# 				$cnvcount++;
+# 			}
+# 		}
+# 		close DUP;
+# 	}
+	
+	## Control on file content
+	if (scalar(@cnvarray) == 0) {
+		print "\n\tWARNING : No DGV/SuperDups info banked ! Problem with the source file ?\n\n";
+	# 	$cnvctrl = '<B><I>E!</I></B>';
+	}
+	else { print "\tfound ".$cnvcount." variations.\n"; }
+	## Sorting
+	print "\tsorting data ...\n";
+	foreach my $c (0..$#cnvarray) {
+		@{$cnvarray[$c]} = sort { ${$a}[1] <=> ${$b}[1] || ${$a}[2] <=> ${$b}[2] } @{$cnvarray[$c]};
+	}
+	##################
+	### CNVBLOCK END #
+	##################
+}
+
+
+
+
+#########
+### RUN #
+#########
+## Generating the exhaustive table, which will be used for many other formats
+print "Pairing features with regions for each sample :\n";
+# my %probtab=();
+my @outprob=();
+foreach my $s (sort(@samples)) {
+	
+	my @sampab = ();
+	## Caring about flat profiles
+	if (exists $sampash{$s}) { 
+		@sampab = @{$sampash{$s}};
+	}
+	
+	my @tempop=();
+	
+	## Getting chromosomes which have at least 1 aberration, in order to skip others later.
+	my %abchrom=();
+	foreach my $ab (0..$#sampab) {
+		## Transforming the list of aberrations for the current sample from a table to an hash of aberrant chr
+		push @{$abchrom{${$sampab[$ab]}[1]}}, [ @{$sampab[$ab]} ];
+	}
+	print "Sample ".$s." : ".join(" ", sort {$a <=> $b} keys(%abchrom))."\n";
+	for my $k (0..$#desp) {
+		## current chr has at least one aberration
+		if (exists $abchrom{$k+1}) {
+			foreach my $p (0..$#{$desp[$k]}) {
+				my $l2r = 0;
+				## Checking if an aberration exists at this probe position
+				foreach my $r (0..$#{$abchrom{$k+1}}) {
+					## IF (ProbeEnd >= RegionStart) & (ProbeStart <= RegionEnd)
+					if ( (${${$desp[$k]}[$p]}[4] >= ${${$abchrom{$k+1}}[$r]}[2]) and (${${$desp[$k]}[$p]}[3] <= ${${$abchrom{$k+1}}[$r]}[3]) ) {
+						$l2r = ${${$abchrom{$k+1}}[$r]}[5];
+						last;
+					}
+				}
+				push @tempop, $l2r;
+			}
+		}
+		## current chr is normal : filling with as many zeros as the current chr has probes in the current design
+		else {
+			my $nchrprob = scalar(@{$desp[$k]});
+			push @tempop, (0) x $nchrprob;
+		}
+	}
+	delete @sampab[0..$#sampab];
+	foreach my $i (0..$#tempop) {
+		push @{$outprob[$i]}, $tempop[$i];
+	}
+	delete @tempop[0..$#tempop];
+}
+
+## Getting the cytoband of each probe
+print("Pairing probes and cytobands ...\n");
+for my $k (0..$#desp) {
+	foreach my $p (0..$#{$desp[$k]}) {
+		foreach my $cb (0..$#{$cytob[$k]}) {
+			if ( (${${$desp[$k]}[$p]}[4] >= ${${$cytob[$k]}[$cb]}[1]) and (${${$desp[$k]}[$p]}[3] <= ${${$cytob[$k]}[$cb]}[2]) ) {
+				my $outband = $chr2chrom{$sp}{$k+1}.${${$cytob[$k]}[$cb]}[3];
+				$outband =~ s/chr//i;
+				push @{${$desp[$k]}[$p]}, $outband;
+				last;
+			}
+		}
+	}
+}
+
+
+############################################
+### MERGING DESIGN AND DATA BLOCK v2 START #
+############################################
+
+my @kprob = ();
+foreach my $k (0..$#desp) {
+# 	my $klong = scalar(@{$desp[$k]});
+	foreach my $p (0..$#{$desp[$k]}) {
+		my $tmpref = shift(@outprob);
+		push @{$kprob[$k]}, [ (@{${$desp[$k]}[$p]}, @$tmpref) ];
+	}
+}
+
+##########################################
+### MERGING DESIGN AND DATA BLOCK v2 END #
+##########################################
+
+
+## Creating outdirs
+mkdir $outroot, 0775;
+mkdir $outroot.'/Data', 0775;
+
+
+## MODULE LST + ALST + GISTIC.SEGMENTS
+my @lstcn = ('Sample', 'Chrom', 'Chr', 'Start', 'End', 'Probes', 'Probe.Start', 'Probe.End', 'CytoBand.Start', 'CytoBand.End', 'Ratio', 'Log2ratio');
+if (($lst eq 'Y') or ($gistic eq 'Y') or ($seg eq 'Y')) {
+	my @lstdat=();
+	if ($lst eq 'Y') {
+		print "Generating LST file as requested ...\n";
+		open LSTOUT, ">".$outroot.'/Data/'.$outroot.'.lst' or die $!;
+		print LSTOUT join("\t", @lstcn)."\n";
+		if ($annot eq 'Y') {
+			print "Generating ALST file as requested ...\n";
+			open ALSTOUT, ">".$outroot.'/Data/'.$outroot.'.alst' or die $!;
+			print ALSTOUT join("\t", @lstcn, @acn)."\n";
+		}
+	}
+	if ($seg eq 'Y') {
+		print "Generating SEG file as requested ...\n";
+		open SEGOUT, ">".$outroot.'/Data/'.$outroot.'.seg' or die $!;
+		my @seghead = ('\'ID', 'chrom', 'loc.start', 'loc.end', 'num.mark', 'seg.mean');
+		print SEGOUT join("\t", @seghead)."\n";
+	}
+	if ($gistic eq 'Y') {
+		print "Generating GISTIC segments file as requested ...\n";
+		open GISTSOUT, ">".$outroot.'/Data/'.$outroot.'.gistic.segments' or die $!;
+		print GISTSOUT join("\t", @lstcn[0,2..5,11])."\n";
+	}
+	foreach my $s (sort(keys(%sampash))) {
+		foreach my $l (0..$#{$sampash{$s}}) {
+			my ($cytostart, $cytoend, $probstart, $probend) = (0, 0, 'NA', 'NA');
+			my @sampl = @{${$sampash{$s}}[$l]};
+			my $chr = $sampl[1];
+			if ( ($chr == 23) and ($noX eq 'Y') ) {
+				next;
+			}
+			if ( ($chr == 24) and ($noY eq 'Y') ) {
+				next;
+			}
+			my $chrk = $chr-1;
+			my $chrom = $chr2chrom{$sp}{$chr};
+			## Probe.Start
+			foreach my $p (0..$#{$desp[$chrk]}) {
+				if ( (${${$desp[$chrk]}[$p]}[3] == $sampl[2]-1) or (${${$desp[$chrk]}[$p]}[3] == $sampl[2]) ) {
+					$sampl[2] = ${${$desp[$chrk]}[$p]}[3];
+					$probstart = ${${$desp[$chrk]}[$p]}[0];
+					$cytostart = ${${$desp[$chrk]}[$p]}[5];
+					last;
+				}
+			}
+			## Probe.End
+			## Tweaking back false end value for GISTIC table
+			my $fake_prob_endloc = $probend;
+			foreach my $p (0..$#{$desp[$chrk]}) {
+				## Gestion des versions de sortie de GC5 avec (+récent) ou sans (+ancien) ajustement de la vraie position de fin de sonde de fin de segment.
+				if ( (${${$desp[$chrk]}[$p]}[3] == $sampl[3]-1) or (${${$desp[$chrk]}[$p]}[4] == $sampl[3]-1) or (${${$desp[$chrk]}[$p]}[3] == $sampl[3]) or (${${$desp[$chrk]}[$p]}[4] == $sampl[3]) ) {
+					$sampl[3] = ${${$desp[$chrk]}[$p]}[4];
+					$fake_prob_endloc = ${${$desp[$chrk]}[$p]}[3];
+					$probend = ${${$desp[$chrk]}[$p]}[0];
+					$cytoend = ${${$desp[$chrk]}[$p]}[5];
+					last;
+				}
+			}
+			## LST output
+			if ($lst eq 'Y') {
+				print LSTOUT join("\t", $s, $chrom, @sampl[1..4], $probstart, $probend, $cytostart, $cytoend, 2**$sampl[5], $sampl[5])."\n";
+			}
+			## SEG output
+			if ($seg eq 'Y') {
+				print SEGOUT join("\t", $s, @sampl[1..4], $sampl[5])."\n";
+			}
+			## GISTIC.SEGMENTS output
+			if ($gistic eq 'Y') {
+				print GISTSOUT join("\t", $s, @sampl[1,2], $fake_prob_endloc, @sampl[4,5])."\n";
+			}
+			## ALST output
+			if ($annot eq 'Y') {
+				## Dealing with genes
+				my @genlist = ();
+				foreach my $g (0..$#{$genarray[$chrk]}) {
+					if ( (${${$genarray[$chrk]}[$g]}[2] <= $sampl[3]) and (${${$genarray[$chrk]}[$g]}[3] >= $sampl[2]) ) {
+						push @genlist, ${${$genarray[$chrk]}[$g]}[0];
+					}
+					elsif (${${$genarray[$chrk]}[$g]}[2] > $sampl[3]) {
+						last;
+					}
+				}
+				## Dealing with miRNAs
+				my @mirlist=();
+				foreach my $g (0..$#{$mirarray[$chrk]}) {
+					if ( (${${$mirarray[$chrk]}[$g]}[1] <= $sampl[3]) and (${${$mirarray[$chrk]}[$g]}[2] >= $sampl[2]) ) {
+						push @mirlist, ${${$mirarray[$chrk]}[$g]}[3];
+					}
+					elsif (${${$mirarray[$chrk]}[$g]}[1] > $sampl[3]) {
+						last;
+					}
+				}
+				## Dealing with CPGislands
+				my $cpgcount=0;
+				foreach my $g (0..$#{$cpgarray[$chrk]}) {
+					if ( (${${$cpgarray[$chrk]}[$g]}[2] <= $sampl[3]) and (${${$cpgarray[$chrk]}[$g]}[3] >= $sampl[2]) ) {
+						$cpgcount++;
+					}
+					elsif (${${$cpgarray[$chrk]}[$g]}[2] > $sampl[3]) {
+						last;
+					}
+				}
+				## Dealing with CNVs
+				my $cnvcount=0;
+				foreach my $g (0..$#{$cnvarray[$chrk]}) {
+					if ( (${${$cnvarray[$chrk]}[$g]}[2] <= $sampl[3]) and (${${$cnvarray[$chrk]}[$g]}[3] >= $sampl[2]) ) {
+						$cnvcount++;
+					}
+					elsif (${${$cnvarray[$chrk]}[$g]}[2] > $sampl[3]) {
+						last;
+					}
+				}
+				
+				my $genword = scalar(@genlist);
+				if (scalar(@genlist) > 0) {
+					$genword = $genword.' ('.join(",", @genlist).')';
+				}
+				
+				my $mirword = scalar(@mirlist);
+				if (scalar(@mirlist) > 0) {
+					$mirword = $mirword.' ('.join(",", @mirlist).')';
+				}
+				
+				print ALSTOUT join("\t", $s, $chrom, @sampl[1..4], $probstart, $probend, $cytostart, $cytoend, 2**$sampl[5], $sampl[5], $genword, $mirword, $cpgcount, $cnvcount)."\n";
+			}
+		}
+	}
+#	close LSTOUT;
+	
+	if ($lst eq 'Y') {
+		close LSTOUT;
+		if ($annot eq 'Y') {
+			close ALSTOUT;
+		}
+	}
+	if ($seg eq 'Y') {
+		close SEG;
+	}
+	if ($gistic eq 'Y') {
+		close GISTSOUT;
+	}
+}
+delete @sampash{keys(%sampash)};
+
+
+## MODULE PROB + APROB + GISTIC.MARKERS
+if (($prob eq 'Y') or ($gistic eq 'Y') or ($cn eq 'Y')) {
+	my @probcn = ('ProbeName', 'Chrom', 'Chr', 'Start', 'End', 'CytoBand', sort @samples);
+	if ($prob eq 'Y') {
+		print "Generating PROB file as requested ...\n";
+		open PROBOUT, ">".$outroot.'/Data/'.$outroot.'.prob' or die $!;
+		print PROBOUT join("\t", @probcn)."\n";
+		if (($annot eq 'Y') and ($noaprob eq 'N')) {
+			print "Generating APROB file as requested ...\n";
+			open APROBOUT, ">".$outroot.'/Data/'.$outroot.'.aprob' or die $!;
+			print APROBOUT join("\t", @probcn, 'Genes', 'CNV')."\n";
+		}
+	}
+	if ($cn eq 'Y') {
+		print "Generating CN file as requested ...\n";
+		open CNOUT, ">".$outroot.'/Data/'.$outroot.'.cn' or die $!;
+		my @cnhead = ('ProbeName', 'Chromosome', 'PhysicalPosition', sort @samples);
+		print CNOUT join("\t", @cnhead)."\n";
+	}
+	if ($gistic eq 'Y') {
+		print "Generating GISTIC markers file as requested ...\n";
+		open GISTMOUT, ">".$outroot.'/Data/'.$outroot.'.gistic.markers' or die $!;
+		print GISTMOUT join("\t", @probcn[0,2,3])."\n";
+		if ($nogcnv eq 'N') {
+			print "Generating GISTIC CNV file as requested ...\n";
+			open GISTCOUT, ">".$outroot.'/Data/'.$outroot.'.gistic.cnvs' or die $!;
+			print GISTCOUT join("\t", "ProbeName", "DGV_ID")."\n";
+		}
+	}
+	foreach my $k (0..$#kprob) {
+		foreach my $l (0..$#{$kprob[$k]}) {
+			
+			if ($prob eq 'Y') {
+				print PROBOUT join("\t", @{${$kprob[$k]}[$l]})."\n";
+			}
+			if ($cn eq 'Y') {
+				print CNOUT join("\t", @{${$kprob[$k]}[$l]}[0,2,3,6..$#{${$kprob[$k]}[$l]}])."\n";
+			}
+			if ($gistic eq 'Y') {
+				print GISTMOUT join("\t", @{${$kprob[$k]}[$l]}[0,2,3])."\n";
+				if ($nogcnv eq 'N') {
+					foreach my $g (0..$#{$cnvarray[$k]}) {
+						if ( (${${$cnvarray[$k]}[$g]}[2] <= ${${$kprob[$k]}[$l]}[4]) and (${${$cnvarray[$k]}[$g]}[3] >= ${${$kprob[$k]}[$l]}[3]) ) {
+							print GISTCOUT join("\t", $kprob[$k][$l][0], 'Variation_'.$cnvarray[$k][$g][0])."\n";
+							last;
+						}
+						elsif (${${$cnvarray[$k]}[$g]}[2] > ${${$kprob[$k]}[$l]}[4]) {
+							last;
+						}
+					}
+				}
+			}
+			
+			## SubModule APROB
+			if (($annot eq 'Y') and ($noaprob eq 'N')) {
+				
+				## Dealing with genes
+				my @genlist = ();
+				foreach my $g (0..$#{$genarray[$k]}) {
+					if ( (${${$genarray[$k]}[$g]}[2] <= ${${$kprob[$k]}[$l]}[4]) and (${${$genarray[$k]}[$g]}[3] >= ${${$kprob[$k]}[$l]}[3]) ) {
+						push @genlist, ${${$genarray[$k]}[$g]}[0];
+					}
+					elsif (${${$genarray[$k]}[$g]}[2] > ${${$kprob[$k]}[$l]}[4]) {
+						last;
+					}
+				}
+				## Dealing with CNVs
+				my $cnvcount=0;
+				foreach my $g (0..$#{$cnvarray[$k]}) {
+					if ( (${${$cnvarray[$k]}[$g]}[2] <= ${${$kprob[$k]}[$l]}[4]) and (${${$cnvarray[$k]}[$g]}[3] >= ${${$kprob[$k]}[$l]}[3]) ) {
+						$cnvcount++;
+					}
+					elsif (${${$cnvarray[$k]}[$g]}[2] > ${${$kprob[$k]}[$l]}[4]) {
+						last;
+					}
+				}
+				
+				print APROBOUT join("\t", @{${$kprob[$k]}[$l]}, join(',', @genlist), $cnvcount)."\n";
+			}
+		}
+	}
+	if ($prob eq 'Y') {
+		close PROBOUT;
+	}
+	if ($cn eq 'Y') {
+		close CNOUT;
+	}
+	if ($gistic eq 'Y') {
+		close GISTMOUT;
+		if ($nogcnv eq 'N') {
+			close GISTCOUT;
+		}
+	}
+	if (($annot eq 'Y') and ($noaprob eq 'N')) {
+		close APROBOUT;
+	}
+}
+
+
+## MODULE GCT (PROB);
+if ( ($prob eq 'Y') and ($gct eq 'Y') ) {
+	print "Generating GCT-type PROB file as requested ...\n";
+	open GCTPOUT, ">".$outroot.'/Data/'.$outroot.'.prob.gct' or die $!;
+	print GCTPOUT "#1.2\n".$nprob."\t".scalar(@samples)."\n";
+	print GCTPOUT join("\t", 'NAME', 'Description', sort(@samples))."\n";
+	foreach my $k (0..$#kprob) {
+		foreach my $l (0..$#{$kprob[$k]}) {
+			print GCTPOUT join("\t", ${${$kprob[$k]}[$l]}[0], join(":", ${${$kprob[$k]}[$l]}[1], join("-", @{${$kprob[$k]}[$l]}[3,4])), @{${$kprob[$k]}[$l]}[6..$#{${$kprob[$k]}[$l]}])."\n";
+		}
+	}
+	close GCTPOUT;
+}
+
+
+## MODULE REG
+my @kreg = ();
+if ($reg eq 'Y') {
+	my @regcn = ('Chrom', 'Chr', 'Start', 'End', 'Probes', 'Probe.Start', 'Probe.End', 'CytoBand.Start', 'CytoBand.End', sort(@samples));
+	print "Generating REG file as requested ...\n";
+	open REGOUT, ">".$outroot.'/Data/'.$outroot.'.reg' or die $!;
+	print REGOUT join("\t", @regcn)."\n";
+	
+	if ($annot eq 'Y') {
+		print "Generating AREG file as requested ...\n";
+		open AREGOUT, ">".$outroot.'/Data/'.$outroot.'.areg' or die $!;
+		print AREGOUT join("\t", @regcn, @acn)."\n";
+	}
+	
+	foreach my $k (0..$#kprob) {
+		my @curreg = ();
+		my $regword = '';
+		my $probcount = 1;
+		foreach my $l (0..$#{$kprob[$k]}) {
+			if ($l == 0) {
+				@curreg = (@{${$kprob[$k]}[$l]}[1..4], 1, @{${$kprob[$k]}[$l]}[0,0,5,5,6..$#{${$kprob[$k]}[$l]}]);
+				$regword = join("_", @{${$kprob[$k]}[$l]}[6..$#{${$kprob[$k]}[$l]}]);
+				next;
+			}
+			my $curword = join("_", @{${$kprob[$k]}[$l]}[6..$#{${$kprob[$k]}[$l]}]);
+			if ($curword eq $regword) {
+				@curreg[3,6,8] = @{${$kprob[$k]}[$l]}[4,0,5];
+				$probcount++;
+			}
+			else {
+				$curreg[4] = $probcount;
+				push @{$kreg[$k]}, [ @curreg ];
+				@curreg = (@{${$kprob[$k]}[$l]}[1..4], 1, @{${$kprob[$k]}[$l]}[0,0,5,5,6..$#{${$kprob[$k]}[$l]}]);
+				$regword = $curword;
+				$probcount = 1;
+				next;
+			}
+			if ($l == $#{$kprob[$k]}) {
+				$curreg[4] = $probcount;
+				push @{$kreg[$k]}, [ @curreg ];
+			}
+		}
+	}
+	
+	foreach my $k (0..$#kreg) {
+		foreach my $l (0..$#{$kreg[$k]}) {
+			print REGOUT join("\t", @{${$kreg[$k]}[$l]})."\n";
+			## SubModule ALST
+			if ($annot eq 'Y') {
+				## Dealing with genes
+				my @genlist = ();
+				foreach my $g (0..$#{$genarray[$k]}) {
+					if ( (${${$genarray[$k]}[$g]}[2] <= ${${$kreg[$k]}[$l]}[3]) and (${${$genarray[$k]}[$g]}[3] >= ${${$kreg[$k]}[$l]}[2]) ) {
+						push @genlist, ${${$genarray[$k]}[$g]}[0];
+					}
+					elsif (${${$genarray[$k]}[$g]}[2] > ${${$kreg[$k]}[$l]}[3]) {
+						last;
+					}
+				}
+				## Dealing with miRNAs
+				my @mirlist=();
+				foreach my $g (0..$#{$mirarray[$k]}) {
+					if ( (${${$mirarray[$k]}[$g]}[1] <= ${${$kreg[$k]}[$l]}[3]) and (${${$mirarray[$k]}[$g]}[2] >= ${${$kreg[$k]}[$l]}[2]) ) {
+						push @mirlist, ${${$mirarray[$k]}[$g]}[3];
+					}
+					elsif (${${$mirarray[$k]}[$g]}[1] > ${${$kreg[$k]}[$l]}[3]) {
+						last;
+					}
+				}
+				## Dealing with CPGislands
+				my $cpgcount=0;
+				foreach my $g (0..$#{$cpgarray[$k]}) {
+					if ( (${${$cpgarray[$k]}[$g]}[2] <= ${${$kreg[$k]}[$l]}[3]) and (${${$cpgarray[$k]}[$g]}[3] >= ${${$kreg[$k]}[$l]}[2]) ) {
+						$cpgcount++;
+					}
+					elsif (${${$cpgarray[$k]}[$g]}[2] > ${${$kreg[$k]}[$l]}[3]) {
+						last;
+					}
+				}
+				## Dealing with CNVs
+				my $cnvcount=0;
+				foreach my $g (0..$#{$cnvarray[$k]}) {
+					if ( (${${$cnvarray[$k]}[$g]}[2] <= ${${$kreg[$k]}[$l]}[3]) and (${${$cnvarray[$k]}[$g]}[3] >= ${${$kreg[$k]}[$l]}[2]) ) {
+						$cnvcount++;
+					}
+					elsif (${${$cnvarray[$k]}[$g]}[2] > ${${$kreg[$k]}[$l]}[3]) {
+						last;
+					}
+				}
+				
+				my $genword = scalar(@genlist);
+				if (scalar(@genlist) > 0) {
+					$genword = $genword.' ('.join(",", @genlist).')';
+				}
+				
+				my $mirword = scalar(@mirlist);
+				if (scalar(@mirlist) > 0) {
+					$mirword = $mirword.' ('.join(",", @mirlist).')';
+				}
+				
+				print AREGOUT join("\t", @{${$kreg[$k]}[$l]}, $genword, $mirword, $cpgcount, $cnvcount)."\n";
+			}
+		}
+	}
+	close REGOUT;
+	
+	if ($annot eq 'Y') {
+		close AREGOUT;
+	}
+}
+
+## MODULE GCT (REG);
+if ( ($reg eq 'Y') and ($gct eq 'Y') ) {
+	print "Generating GCT-type REG file as requested ...\n";
+	open GCTROUT, ">".$outroot.'/Data/'.$outroot.'.reg.gct' or die $!;
+	my $rc = 0;
+	foreach my $k (0..$#kreg) {
+		$rc += scalar(@{$kreg[$k]});
+	}
+	print GCTROUT "#1.2\n".$rc."\t".scalar(@samples)."\n";
+	print GCTROUT join("\t", 'NAME', 'Description', sort(@samples))."\n";
+	foreach my $k (0..$#kreg) {
+		foreach my $l (0..$#{$kreg[$k]}) {
+			print GCTROUT join("\t", join("-", ${${$kreg[$k]}[$l]}[5], ${${$kreg[$k]}[$l]}[6]), join(":", ${${$kreg[$k]}[$l]}[0], join("-", @{${$kreg[$k]}[$l]}[2,3])), @{${$kreg[$k]}[$l]}[9..$#{${$kreg[$k]}[$l]}])."\n";
+		}
+	}
+	close GCTROUT;
+}
+
+
+## MODULE XREG;
+if ($xreg eq 'Y') {
+	print "Generating XREG file as requested ...\n";
+	my @xregcn = ('Chrom', 'Chr', 'Start', 'End', 'Probes', 'Probe.Start', 'Probe.End', 'CytoBand.Start', 'CytoBand.End', sort(@samples));
+	open XREGOUT, ">".$outroot.'/Data/'.$outroot.'.xreg' or die $!;
+	print XREGOUT join("\t", @xregcn)."\n";
+	
+	if ($annot eq 'Y') {
+		print "Generating AXREG file as requested ...\n";
+		open AXREGOUT, ">".$outroot.'/Data/'.$outroot.'.axreg' or die $!;
+		print AXREGOUT join("\t", @xregcn, @acn)."\n";
+	}
+	foreach my $k (0..$#kreg) {
+		foreach my $l (0..$#{$kreg[$k]}) {
+			if ($l < $#{$kreg[$k]}) {
+				if ($iprob{${${$kreg[$k]}[$l]}[6]} == ($iprob{${${$kreg[$k]}[$l+1]}[5]}-1)) {
+					my $ntavg = sprintf("%d", (${${$kreg[$k]}[$l]}[3] + ${${$kreg[$k]}[$l+1]}[2])/2);
+					${${$kreg[$k]}[$l]}[3] = $ntavg;
+					${${$kreg[$k]}[$l+1]}[2] = $ntavg+1;
+				}
+			}
+			print XREGOUT join("\t", @{${$kreg[$k]}[$l]})."\n";
+			
+			## SubModule ALST
+			if ($annot eq 'Y') {
+				## Dealing with genes
+				my @genlist = ();
+				foreach my $g (0..$#{$genarray[$k]}) {
+					if ( (${${$genarray[$k]}[$g]}[2] <= ${${$kreg[$k]}[$l]}[3]) and (${${$genarray[$k]}[$g]}[3] >= ${${$kreg[$k]}[$l]}[2]) ) {
+						push @genlist, ${${$genarray[$k]}[$g]}[0];
+					}
+					elsif (${${$genarray[$k]}[$g]}[2] > ${${$kreg[$k]}[$l]}[3]) {
+						last;
+					}
+				}
+				## Dealing with miRNAs
+				my @mirlist=();
+				foreach my $g (0..$#{$mirarray[$k]}) {
+					if ( (${${$mirarray[$k]}[$g]}[1] <= ${${$kreg[$k]}[$l]}[3]) and (${${$mirarray[$k]}[$g]}[2] >= ${${$kreg[$k]}[$l]}[2]) ) {
+						push @mirlist, ${${$mirarray[$k]}[$g]}[3];
+					}
+					elsif (${${$mirarray[$k]}[$g]}[1] > ${${$kreg[$k]}[$l]}[3]) {
+						last;
+					}
+				}
+				## Dealing with CPGislands
+				my $cpgcount=0;
+				foreach my $g (0..$#{$cpgarray[$k]}) {
+					if ( (${${$cpgarray[$k]}[$g]}[2] <= ${${$kreg[$k]}[$l]}[3]) and (${${$cpgarray[$k]}[$g]}[3] >= ${${$kreg[$k]}[$l]}[2]) ) {
+						$cpgcount++;
+					}
+					elsif (${${$cpgarray[$k]}[$g]}[2] > ${${$kreg[$k]}[$l]}[3]) {
+						last;
+					}
+				}
+				## Dealing with CNVs
+				my $cnvcount=0;
+				foreach my $g (0..$#{$cnvarray[$k]}) {
+					if ( (${${$cnvarray[$k]}[$g]}[2] <= ${${$kreg[$k]}[$l]}[3]) and (${${$cnvarray[$k]}[$g]}[3] >= ${${$kreg[$k]}[$l]}[2]) ) {
+						$cnvcount++;
+					}
+					elsif (${${$cnvarray[$k]}[$g]}[2] > ${${$kreg[$k]}[$l]}[3]) {
+						last;
+					}
+				}
+				
+				my $genword = scalar(@genlist);
+				if (scalar(@genlist) > 0) {
+					$genword = $genword.' ('.join(",", @genlist).')';
+				}
+				
+				my $mirword = scalar(@mirlist);
+				if (scalar(@mirlist) > 0) {
+					$mirword = $mirword.' ('.join(",", @mirlist).')';
+				}
+				
+				print AXREGOUT join("\t", @{${$kreg[$k]}[$l]}, $genword, $mirword, $cpgcount, $cnvcount)."\n";
+			}
+		}
+	}
+	close XREGOUT;
+	
+	if ($annot eq 'Y') {
+		close AXREGOUT;
+	}
+}
+
+## MODULE GCT (XREG);
+if ( ($xreg eq 'Y') and ($gct eq 'Y') ) {
+	print "Generating GCT-type XREG file as requested ...\n";
+	open GCTXROUT, ">".$outroot.'/Data/'.$outroot.'.xreg.gct' or die $!;
+	my $rc = 0;
+	foreach my $k (0..$#kreg) {
+		$rc += scalar(@{$kreg[$k]});
+	}
+	print GCTXROUT "#1.2\n".$rc."\t".scalar(@samples)."\n";
+	print GCTXROUT join("\t", 'NAME', 'Description', sort(@samples))."\n";
+	foreach my $k (0..$#kreg) {
+		foreach my $l (0..$#{$kreg[$k]}) {
+			print GCTXROUT join("\t", join("-", ${${$kreg[$k]}[$l]}[5], ${${$kreg[$k]}[$l]}[6]), join(":", ${${$kreg[$k]}[$l]}[0], join("-", @{${$kreg[$k]}[$l]}[2,3])), @{${$kreg[$k]}[$l]}[9..$#{${$kreg[$k]}[$l]}])."\n";
+		}
+	}
+	close GCTXROUT;
+}
+
+
+## MODULE STAC;
+if ($stac eq 'Y') {
+	print "Generating STAC files as requested ...\n";
+	mkdir $outroot.'/Data/STAC', 0775;
+	foreach my $k (0..$#kprob) {
+		foreach my $arm ('p', 'q') {
+			my @probnam = ();
+			open STACOUTG, ">".$outroot.'/Data/STAC/'.$chr2chrom{$sp}{$k+1}.$arm.'_GAIN_'.$outroot or die $!;
+			open STACOUTL, ">".$outroot.'/Data/STAC/'.$chr2chrom{$sp}{$k+1}.$arm.'_LOSS_'.$outroot or die $!;
+			my @armg = ();
+			my @arml = ();
+			foreach my $l (0..$#{$kprob[$k]}) {
+				if (${${$kprob[$k]}[$l]}[5] =~  /$arm/i) {
+					push @probnam, ${${$kprob[$k]}[$l]}[0];
+					my @tempg = @{${$kprob[$k]}[$l]}[6..$#{${$kprob[$k]}[$l]}];
+					my @templ = @tempg;
+					foreach my $t (0..$#tempg) {
+						if ($tempg[$t] > 0) { $tempg[$t] = 1; } else { $tempg[$t] = 0; }
+						if ($templ[$t] < 0) { $templ[$t] = 1; } else { $templ[$t] = 0; }
+					}
+					push @armg, [ @tempg ];
+					push @arml, [ @templ ];
+				}
+			}
+			@armg = transmat @armg;
+			@arml = transmat @arml;
+			print STACOUTG "\t".join("\t", @probnam)."\n";
+			print STACOUTL "\t".join("\t", @probnam)."\n";
+			foreach my $g (0..$#armg) {
+				print STACOUTG join("\t", $samples[$g], @{$armg[$g]})."\n";
+				print STACOUTL join("\t", $samples[$g], @{$arml[$g]})."\n";
+			}
+			close STACOUTG;
+			close STACOUTL;
+		}
+	}
+}
+
+
+sub sum {
+	my $sum=0;
+	foreach (@_) {
+		$sum += $_;
+	}
+	return $sum;
+}

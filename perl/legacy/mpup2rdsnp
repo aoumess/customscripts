@@ -1,0 +1,177 @@
+#!/usr/bin/perl
+use strict;
+use warnings;
+use List::Util "sum";
+use POSIX;
+use Getopt::Long qw(:config pass_through no_ignore_case);
+
+my $bin_size = 50;
+my $samplename = "SAMPLE";
+GetOptions ("binsize:i" => \$bin_size, "samplename:s" => \$samplename);
+
+print '
+Requires a samtools mpileup output file in STDIN as input (performed on both reference, in first position, and test, in second).
+EXAMPLE1 : cat mysample.pileup | mpup2rdsnp -binsize 50 -samplename SAMPLE
+EXAMPLE2 : gunzip -c mysample.pileup.gz | mpup2rdsnp -binsize 50 -samplename SAMPLE
+EXAMPLE3 : bunzip2 -c mysample.pileup.bz2 | mpup2rdsnp -binsize 50 -samplename SAMPLE
+
+';
+
+open RDOUT, ">".$samplename."_bin".$bin_size."_rd.txt" or die $!;
+print RDOUT join("\t", "chr", "start", "end", "width", "RD_A", "RD_B")."\n";
+
+open SNPOUT, ">".$samplename."_bin".$bin_size."_snp.txt" or die $!;
+print SNPOUT join("\t", "chr", "start", "RD_A", "num_ref_dot_A", "num_ref_coma_A", "BAF_A", "RD_B", "num_ref_dot_B", "num_ref_coma_B", "BAF_B")."\n";
+
+open BEDOUT, ">".$samplename."_bin".$bin_size.".bed" or die $!;
+print BEDOUT join("\t", "#chr", "start", "end")."\n";
+
+my @block = ();
+
+sub median {
+	my @values = @_;
+	my $vlen = scalar @values;
+	my $center = int($vlen/2);
+	my $median = 0;
+	if ($vlen % 2) {
+		$median = $values[$center];
+	} else {
+		$median = ($values[$center] + $values[$center-1]) /2;
+	}
+	return $median;
+}
+
+sub round {
+	return POSIX::ceil(@_);
+}
+
+sub makebins {
+	
+	my @block_cut_start = ();
+	my @block_cut_end = ();
+	## Changing exon
+	my $blocklen = scalar(@block);
+	
+	if ($blocklen < $bin_size) {
+		@block_cut_end = ($blocklen);
+		@block_cut_start = (1);
+	}
+	else {
+		my $blockmod_rest = $blocklen % $bin_size;
+		my $blockmod_count = ($blocklen - $blockmod_rest) / $bin_size;
+		## Perfect multiple
+		if ($blockmod_rest == 0) {
+			@block_cut_end = map($_ * $bin_size, 1..$blockmod_count);
+			## Case of a single bin
+			if (scalar(@block_cut_end) == 1) {
+				@block_cut_start = 1;
+			}
+			## Case of multiple bins
+			else {
+				@block_cut_start = (1, map($_ + 1, @block_cut_end[0..($#block_cut_end-1)]));
+			}
+		}
+		## There is a rest
+		else {
+			## IF the rest is BIGGER THAN OR EQUAL TO half the requested bin size ...
+			if ($blockmod_rest >= ($bin_size / 2)) {
+				## ... then keep it as a new bin
+				@block_cut_end = (map($_ * $bin_size, 1..$blockmod_count), $blocklen);
+				@block_cut_start = (1, map($_ + 1, @block_cut_end[0..($#block_cut_end-1)]));
+			}
+			## IF the rest is SMALLER THAN half the requested bin size ...
+			else {
+				## ... then dispatch it to true bins
+				## IF there are MORE (or equal) resting values than bins ...
+				if ($blockmod_rest >= $blockmod_count) {
+					my $blockmod_rest_lv2 = $blockmod_rest % $blockmod_count;
+					my $blockmod_count_lv2 = ($blockmod_rest - $blockmod_rest_lv2) / $blockmod_count;
+				
+					## The easier way : dispatch as much as you can, and add the ultimate rest to the last bin
+					@block_cut_end = map($_ * ($bin_size + $blockmod_count_lv2), 1..$blockmod_count);
+					## Adding the final rest (if any ; if not, adds zero)
+					$block_cut_end[$#block_cut_end] = $block_cut_end[$#block_cut_end] + $blockmod_rest_lv2;
+					@block_cut_start = (1, map($_ + 1, @block_cut_end[0..($#block_cut_end-1)]));
+				
+					## The more difficult way : dispatch more homogeneously (not done yet =P)
+				}
+				## IF there are LESS resting values than bins ...
+				else {
+					@block_cut_end = map(($_ * $bin_size), 1..$blockmod_count);
+					$block_cut_end[$#block_cut_end] = $block_cut_end[$#block_cut_end] + $blockmod_rest;
+					@block_cut_start = (1, map($_ + 1, @block_cut_end[0..($#block_cut_end-1)]));
+				
+				}
+			}
+		}
+	}
+	## Printing bins
+	foreach my $b (0..$#block_cut_end) {
+#		print "I've got bins ! ".$b."\n";
+		my @vals_A = ();
+		my @vals_B = ();
+		my $bin_start_idx = $block_cut_start[$b] - 1;
+		my $bin_end_idx = $block_cut_end[$b] - 1;
+		my $bin_len = $bin_end_idx - $bin_start_idx + 1;
+		foreach my $x ($bin_start_idx..$bin_end_idx) {
+			push @vals_A, $block[$x][3];
+			push @vals_B, $block[$x][6];
+		}
+		my $med_A = round(median(@vals_A));
+		my $med_B = round(median(@vals_B));
+		print RDOUT join("\t", $block[$bin_start_idx][0], $block[$bin_start_idx][1], $block[$bin_end_idx][1], $bin_len, $med_A, $med_B)."\n";
+		print BEDOUT join("\t", $block[$bin_start_idx][0], $block[$bin_start_idx][1], $block[$bin_end_idx][1])."\n";
+	}
+}
+
+while (<>) {
+	print $.."\n";
+	my $line = $_;
+	my @columns = split "\t", $line;
+	
+	my $chr = $columns[0];
+	my $start = $columns[1];
+	my $num_reads_A = $columns[3];
+	my $num_reads_B = $columns[6];
+#	print $start." A ".$num_reads_A." B ".$num_reads_B."\n";
+	my $num_ref_dot_A = 0;
+	my $num_ref_coma_A = 0;
+	my $num_ref_dot_B = 0;
+	my $num_ref_coma_B = 0;
+	if (($num_reads_A > 0) or ($num_reads_B > 0)) {
+		my $varAlleleFreq_A = 0;
+		if ($num_reads_A > 0) {
+			my $calls_A = $columns[4];
+			while ($calls_A =~ /[.]/g) { $num_ref_dot_A++ }
+			while ($calls_A =~ /[,]/g) { $num_ref_coma_A++ }
+			my $num_ref_A = $num_ref_dot_A + $num_ref_coma_A;
+			my $num_var_A = $num_reads_A - $num_ref_A;
+			$varAlleleFreq_A = $num_var_A/$num_reads_A;
+		}
+		my $varAlleleFreq_B = 0;
+		if ($num_reads_B > 0) {
+			my $calls_B = $columns[7];
+			while ($calls_B =~ /[.]/g) { $num_ref_dot_B++ }
+			while ($calls_B =~ /[,]/g) { $num_ref_coma_B++ }
+			my $num_ref_B = $num_ref_dot_B + $num_ref_coma_B;
+			my $num_var_B = $num_reads_B - $num_ref_B;
+			$varAlleleFreq_B = $num_var_B/$num_reads_B;
+		}
+		if (($varAlleleFreq_A > 0) or ($varAlleleFreq_B > 0)) {
+			print SNPOUT "$chr\t$start\t$num_reads_A\t$num_ref_dot_A\t$num_ref_coma_A\t$varAlleleFreq_A\t$num_reads_B\t$num_ref_dot_B\t$num_ref_coma_B\t$varAlleleFreq_B\n";
+		}
+	}
+	if ($. > 1) {
+		if ($columns[1] != ($block[$#block][1] + 1)) {
+					print "I've got bins ! ".$block[$#block][1]."\n";
+			&makebins(@block);
+			@block = ();
+		}
+	}
+	push @block, [ @columns ];
+}
+&makebins(@block);
+
+close BEDOUT;
+close SNPOUT;
+close RDOUT;

@@ -1,0 +1,336 @@
+#!/usr/bin/perl
+use strict;
+
+
+## Version notes
+##
+## v1.1 20110831
+##	. Modified the shebang, so that this script can be called from any unix system.
+##	. Added support for mus musculus.
+##
+## v1.0 20090227
+##	. Initial release. Made to support the new PROB format from tabgen.
+
+
+my $version = '1.1 20110831';
+
+
+
+
+## CHROM to CHR converter
+my %chrom2chr = (	'hs' =>	{ 'chr1' => 1, 'chr2' => 2, 'chr3' => 3, 'chr4' => 4, 'chr5' => 5, 'chr6' => 6, 'chr7' => 7, 'chr8' => 8, 'chr9' => 9, 'chr10' => 10, 'chr11' => 11, 'chr12' => 12, 'chr13' => 13, 'chr14' => 14, 'chr15' => 15, 'chr16' => 16, 'chr17' => 17, 'chr18' => 18, 'chr19' => 19, 'chr20' => 20, 'chr21' => 21, 'chr22' => 22, 'chrX' => 23, 'chrY' => 24 },
+			'mm' =>	{ 'chr1' => 1, 'chr2' => 2, 'chr3' => 3, 'chr4' => 4, 'chr5' => 5, 'chr6' => 6, 'chr7' => 7, 'chr8' => 8, 'chr9' => 9, 'chr10' => 10, 'chr11' => 11, 'chr12' => 12, 'chr13' => 13, 'chr14' => 14, 'chr15' => 15, 'chr16' => 16, 'chr17' => 17, 'chr18' => 18, 'chr19' => 19, 'chrX' => 20, 'chrY' => 21 }	);
+
+my $freqmin = 0.1;
+my $conf = 0.95;
+my $inputfile = '';
+my $repdir = 'null';
+my $nlim = 100;
+my $sp = 'hs';
+
+
+
+
+if (scalar(@ARGV) == 0) {
+	print '
+MINICR_PROB v'.$version.'
+ for MINImal Common Regions annotator, "PROB" version.
+
+DESCRIPTION: This scrit extracts statistically relevant regions
+   as MCRs from STAC output files. A PROB file (for the probes
+   positions) is also needed. Generated output files are an
+   file, with genomic positions that can be used
+   with the genrdesc script to annotate these regions (genrdesc
+   with the [-mode mcr] option.
+
+USAGE: minicr -rep [path] -prob [file.prob] -sp [hs|mm] -fm [value<1] -c [value<1] -Nlim [value>60]
+
+	-rep	A path to the directory hosting *.report files
+ 		from STAC. [default to current dir]
+
+	-sp	Species. ['.$sp.']
+
+	-prob	The PROB file made along with the STAC datafiles, by tabgen.
+
+	-fm	Minimum frequency to consider a MCR, because the "C"
+ 		of MCR means "COMMON". So regions implying few % of
+		samples are not interesting. Please note that this
+		threshold is a global frequency. ['.$freqmin.']
+
+	-c	Minimum confidence of the statistic. ['.$conf.']
+ 
+	-Nlim	Minimal size (in bp) for MCRs. ['.$nlim.']
+
+';
+exit;
+}
+
+
+
+foreach (@ARGV) {
+	chomp;
+}
+
+foreach my $i (0..$#ARGV) {
+	if ($ARGV[$i] =~ /^-rep/i) {			# r�pertoire des fichiers report de STAC
+		$repdir = $ARGV[$i+1];
+	}
+	elsif ($ARGV[$i] =~ /^-sp/i) {			# fichier abrX � l'origine des rapports STAC
+		$sp = $ARGV[$i+1];
+	}
+	elsif ($ARGV[$i] =~ /^-prob/i) {			# fichier abrX � l'origine des rapports STAC
+		$inputfile = $ARGV[$i+1];
+	}
+	elsif ($ARGV[$i] =~ /^-fm/i) {			# fr�quence minimale
+		$freqmin = $ARGV[$i+1];
+	}
+	elsif ($ARGV[$i] =~ /^-c/i) {			# P value minimale pour retenir le MCR.
+		$conf = $ARGV[$i+1];
+	}
+	elsif ($ARGV[$i] =~ /^-Nlim/i) {			# P value minimale pour retenir le MCR.
+		$nlim = $ARGV[$i+1];
+	}
+}
+
+## CHECK on input PROB file
+if (length($inputfile) == 0) {
+	print "\n\nERROR : No PROB file specified!\n\n";
+	exit;
+}
+## CHECK on input STAC files
+if ($repdir eq 'null') {
+	print "\n\nERROR : No path to the STAC reports specified!\n\n";
+	exit;
+}
+## CHECK on species
+my %splist = ('hs' => 'homo sapiens', 'mm' => 'mus musculus');
+if (!exists $splist{$sp}) {
+	die "\nERROR : Unknown species or genome build !\n";
+}
+else { print "Working on ".$splist{$sp}."\n"; }
+
+
+my $tempifroot = (split /\//, $inputfile)[-1];
+$tempifroot = (split /.abr[0-9]./, $tempifroot)[0];
+my $ifroot = (split /\\/, $tempifroot)[-1];
+
+
+print "REPDIR : ".$repdir."\n";
+
+my @reports = `ls $repdir/*.report`;
+
+print '
+
+STAC reports directory : '.$repdir.'
+('.@reports.' reports found).
+Initial PROB file : '.$ifroot.'
+Minimal frequency : '.$freqmin.'
+Confidence cut-off : '.$conf.'
+Normal MCR minimal size : '.$nlim.' bp
+
+';
+
+
+
+my %hash;
+my @BIGin;
+print "Getting probe positions ...\n";
+open PP, $inputfile;
+foreach (<PP>) {
+	chomp;
+	push @BIGin, [ split /\t/, $_ ];
+}
+close PP;
+
+@BIGin = sort { ${$a}[2] <=> ${$b}[2] || ${$a}[3] <=> ${$b}[3] } @BIGin;
+
+
+foreach my $b (0..$#BIGin) {
+	my @temp = @{$BIGin[$b]};
+	if ( ($temp[0] !~ /^n$/i) and ($temp[0] !~ /^Probe/i) ) {
+		$hash{$temp[0]} = [ @temp[3,4] ];
+	}
+}
+close PP;
+
+my %imode = ( 'foot' => 3, 'freq' => 2 );
+
+foreach my $mode ('foot', 'freq') {
+	
+	print "\n\t---> METHOD = ".$mode."\n\n";
+
+	my $index = $imode{$mode};
+# 	if ($mode eq 'foot') {
+# 		$index = 3;
+# 	}
+# 	elsif ($mode eq 'freq') {
+# 		$index = 2;
+# 	}
+	
+	my $id=0;
+	my @LIST=();
+	
+	
+	foreach my $rep (@reports) {
+		
+		chomp $rep;
+		
+		my @lines=();
+		my $rf = (split /\//, $rep)[-1];
+		my ($chr, $type) = (split /\_/, $rf)[0..1];
+		
+		print "\t".$chr."\t".$type."\n";
+		
+		my $curchrom = $chr;
+		$curchrom =~ s/(q|p)//;
+		$curchrom = $chrom2chr{$sp}{$curchrom};
+		
+		open REP, $rep or die $!;
+		foreach (<REP>) {
+			chomp;
+			if ($_ !~ /^location\t/i) {
+				push @lines, [ split(/\t/, $_) ];
+			}
+		}
+		close REP;
+		
+		my $openflag=0;
+		my $probecounter=0;
+		
+# 		my @goodfreqz=();
+		
+		my @feats=();
+		
+		my @BOF=();
+		
+		my $formerfreq=0;
+	
+		foreach my $l (0..$#lines) {
+			
+			my @temp = @{$lines[$l]};
+			
+			$temp[0] =~ s/\s//g;
+			
+			## SOUS LE THRESHOLD -ET- FREQUENCE SUFFISANTE...
+			if ( ($temp[$index] <= (1-$conf)) and ($temp[1] > $freqmin) ) {
+				
+				$probecounter++;
+# 				push @goodfreqz, $temp[1];
+				
+				if ($l != $#lines) {
+					## PAS DE FENETRE OUVERTE...
+					if ($openflag == 0) {
+						$id++;
+						print "Frame ".$id." OPENED.\n";
+						@feats = ($curchrom, $temp[0], $hash{$temp[0]}[0], $temp[0], $hash{$temp[0]}[1], 1, ($hash{$temp[0]}[1] - $hash{$temp[0]}[0] + 1), lc($type), $temp[1], $temp[$index]);
+						$openflag++;
+						$formerfreq = $temp[1];
+					}
+					## FENETRE OUVERTE ...
+					else {
+						## VARIATION DE FREQUENCE : ON FERME ET ON OUVRE UNE AUTRE FENETRE !
+						if ( ($temp[1] != $formerfreq) and ($formerfreq ne 'null') ) {
+							
+							print "Frame ".$id." CLOSED (frequency changed).\n";
+							push @LIST, [ @feats ];
+							
+							$id++;
+							print "Frame ".$id." OPENED.\n";
+							$probecounter=1;
+							@feats = ($curchrom, $temp[0], $hash{$temp[0]}[0], $temp[0], $hash{$temp[0]}[1], $probecounter, ($hash{$temp[0]}[1] - $hash{$temp[0]}[0] + 1), lc($type), $temp[1], $temp[$index]);
+							$formerfreq = $temp[1];
+							
+						}
+						## PAS DE CHANGEMENT DE FREQUENCE : ON AJOUTE LES INFOS DE LA SONDE EN COURS A LA REGION EN COURS.
+						else {
+							@feats[3..6] = ($temp[0], $hash{$temp[0]}[1], $probecounter, ($hash{$temp[0]}[1] - $feats[2] + 1));
+						}
+					}
+				}
+				## SI ON ARRIVE EN FIN DE LIGNE...
+				else {
+# 					if ( ($temp[1] != $formerfreq) and ($formerfreq ne 'null') ) {
+							
+						## SI VARIATION DE FREQUENCE : ON FERME LA FENETRE EN COURS ET ON EN CREE UNE DERNIERE QU'ON FERME A SON TOUR !
+						print "Frame ".$id." CLOSED (EOF).\n";
+						push @LIST, [ @feats ];
+						
+						$probecounter=1;
+						$id++;
+						@feats = ($curchrom, $temp[0], $hash{$temp[0]}[0], $temp[0], $hash{$temp[0]}[1], 1, ($hash{$temp[0]}[1] - $hash{$temp[0]}[0] + 1), lc($type), $temp[1], $temp[$index]);
+						push @LIST, [ @feats ];
+						print "LAST Frame ".$id." created then closed (EOF).\n";
+# 					}
+					
+				}
+				
+			}
+			## PAS SOUS LE THRESHOLD OU FREQUENCE TROP FAIBLE...
+			## SI FENETRE OUVERTE, ALORS ON LA FERME.
+			elsif ($openflag == 1) {
+				print "Frame ".$id." CLOSED (Under threshold or minimum frequency).\n";
+				push @LIST, [ @feats ];
+				@feats = ();
+				$formerfreq = 'null';
+				$openflag = 0;
+				$probecounter = 0;
+			}
+		}
+	}
+	
+		
+	@LIST = sort { ${$a}[0] <=> ${$b}[0] || ${$a}[2] <=> ${$b}[2] || ${$a}[4] <=> ${$b}[4] } @LIST;
+	
+	open OUT, ">MiniCR2_".$mode.'_'.$ifroot.'_R'.$#LIST.'_fm'.$freqmin.'_c'.$conf.'_Nlim'.$nlim.'.txt' or die $!;
+	print OUT "#Loc\tChr\tProbe_start\tStart\tProbe_end\tEnd\tNum_probes\tLength\tMCR_type\tFreq\tConf_".$mode."\n";
+
+	
+	foreach my $l (0..$#LIST) {
+		
+		${$LIST[$l]}[7] =~ s/gain/G/;
+		${$LIST[$l]}[7] =~ s/loss/L/;
+		${$LIST[$l]}[7] =~ s/normal/N/;
+		
+		${$LIST[$l]}[8] = sprintf("%.3f", ${$LIST[$l]}[8]);
+		${$LIST[$l]}[9] = sprintf("%.3f", (1-${$LIST[$l]}[9]));
+		
+		## Filtrage des MCR de type 'N' par la taille;
+# 		if ( (${$LIST[$l]}[7] eq 'N') and (${$LIST[$l]}[6] < $nlim) ) {
+		if (${$LIST[$l]}[6] < $nlim) {
+			next;
+		}
+		
+		my $minichr = ${$LIST[$l]}[0];
+		if ($sp eq 'hs') {
+			$minichr =~ s/23/X/;
+			$minichr =~ s/24/Y/;
+		}
+		elsif ($sp eq 'mm') {
+			$minichr =~ s/20/X/;
+			$minichr =~ s/21/Y/;
+		}
+	 	
+		print OUT join("\t", 'chr'.$minichr.':'.${$LIST[$l]}[2].'-'.${$LIST[$l]}[4], @{$LIST[$l]})."\n";
+	}
+	close OUT;
+}
+
+
+
+			
+## Subfunctions	
+
+sub sum {
+	my @values = @_;
+	my $valsum = 0;
+	foreach (@values) {
+		$valsum += $_;
+	}
+	return $valsum;
+}
+
+sub avg {
+	my @values = @_;
+	my $valsum = sum(@values);
+	return($valsum / scalar(@values));
+}

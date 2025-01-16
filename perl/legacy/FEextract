@@ -1,0 +1,362 @@
+#!/usr/bin/perl
+use strict;
+use diagnostics;
+# use Getopt::Long;
+use Parallel::ForkManager;
+
+my $version = '1.8 20150113';
+
+## This script parses a Feature Extraction [(c) Agilent Software] text file and extracts
+## requested columns by their name. Column 'ProbeName', and built-in genomic cordinates are
+## automaticaly extracted and output. Flags columns 'ControlType', 'gIsSaturated', 'rIsSaturated',
+## 'gIsFeatNonUnifOL', 'rIsFeatNonUnifOL' are also extracted and used to filted out flagged
+## probes, but not included into the output file. 
+
+## VERSION NOTES
+##
+## v1.8 20150113
+##  . Changed flag strategy : Now xIsSaturated == 1 are kept. This is done to keep a very rare
+##    but important case where very high-level amplifications were lost due to saturation of
+##    the test intensities.
+##
+## v1.7b 20140305
+##  . Added better support of barcode handling for mono-array slides (automatically adds a
+##    '_1_1' for such cases).
+##
+## v1.7 20121121
+##  . Added multithreading thanks to the Parallel::ForkManager module. Use the new --nt option.
+##  . The requirement for this module is mandatory, even if run monothreaded. Thus, the
+##    single-threaded version will be kept and rename as 'FEextract_old', but won't be updated
+##    with the same pace. Always prefer this version.
+##  . Used WHILE instead of FOREACH for the parsing of fex files : takes less RAM
+##
+## v1.6b 20111215
+##  . Due to the numerous resquests of two persons (not citing them : Guillaume & Philippe...), changed
+##    the behaviour of the '-colnames' option when not called : now, it will be equivalent to calling
+##    '-colnames default' (ie, rMedianSignal & gMedianSignal will be extracted).
+##
+## v1.6 20111124
+##  . Changed output filename to also have the AMADID included, mandatory for the GC5.R script v5.9.0+.
+##
+## v1.5 20110831
+##  .Translated the header.
+##  . Modified the shebang, so that this script can be called from any unix system.
+##
+## v1.4 20100916
+##  . Modification de l'option -chrY [default N] vers -noY [default N]. Désormais, le chrY sera inclus par défaut.
+##  . Modification du mode 'default' : utilisation des colonnes xMedianSignal (et non plus xProcessedSignal !)
+##
+## v1.3d 20100114
+##  . Modified handling of design codes / barcodes to automaticaly take the good info, whichever design you use.
+##
+## v1.3c 20091130
+##  . Correction de bogue : le chrX n'etait plus considere !
+##
+## v1.3b 20091124
+##  . Ajout d'un parametre '-sp' pour donner l'espece [hs|mm], necessaire pour le changement des chrX et chrY en version numerique
+##    (23 et 24 chez homo sapiens; 20 et 21 chez mus musculus).
+##
+## v1.3 20090701
+##  . Modification de la gestion des fichiers d'entree, via creation des argument -f et -l :
+## 	-f : pour definir le nom d'un (ou plusieurs via caracteres speciaux) fichier FE
+## 	-l : pour definir le nom d'un fichier-liste dans lequel lire les chemins vers des
+## 	     fichiers FE epars.
+##
+## v1.2 20090112
+##  . Correction de bug mineur.
+##
+## v1.1 20080814
+##  . Ajout de l'option '-nodupe' pour ne faire apparaitre qu'une seule fois les sondes repliquees. Necessaire si les fichiers generes
+##    serviront a comparer deux arrays aux designs differents !
+##
+## v1.0 20080630
+##  . Premiere version.
+
+## Setting output writing to direct mode :
+$|++;
+
+## Default options :
+my %opts = ('' => 12, 's' => 25, 'sp' => 'hs', 'nt' => 1, 'm' => 'tri');
+
+
+my %chrom2chr = (	'hs' =>	{ 'chr1' => 1, 'chr2' => 2, 'chr3' => 3, 'chr4' => 4, 'chr5' => 5, 'chr6' => 6, 'chr7' => 7, 'chr8' => 8, 'chr9' => 9, 'chr10' => 10, 'chr11' => 11, 'chr12' => 12, 'chr13' => 13, 'chr14' => 14, 'chr15' => 15, 'chr16' => 16, 'chr17' => 17, 'chr18' => 18, 'chr19' => 19, 'chr20' => 20, 'chr21' => 21, 'chr22' => 22, 'chrX' => 23, 'chrY' => 24 },
+			'mm' =>	{ 'chr1' => 1, 'chr2' => 2, 'chr3' => 3, 'chr4' => 4, 'chr5' => 5, 'chr6' => 6, 'chr7' => 7, 'chr8' => 8, 'chr9' => 9, 'chr10' => 10, 'chr11' => 11, 'chr12' => 12, 'chr13' => 13, 'chr14' => 14, 'chr15' => 15, 'chr16' => 16, 'chr17' => 17, 'chr18' => 18, 'chr19' => 19, 'chrX' => 20, 'chrY' => 21 }	);
+
+my $list='';
+my $flag='Y';
+my $nosat='N';
+my $noY='N';
+my $nodupe='Y';
+my $sp = "hs";
+my $nt = 1;
+my @inflist=();
+
+my $ndupout = '';
+
+if (scalar(@ARGV) == 0) {
+	print '
+FEEXTRACT v'.$version.'
+ for FeatureExtraction files data EXTRACTor.
+
+USAGE:
+"FEextract {-f [FE file(s)] | -l [list] } -c [names] --flag [Y|N] --nosat[Y|N] --noY [Y|N] --nodupe [Y|N] --sp [hs|mm] -n [int>0]"
+
+REQUIRED OPTIONS :
+	-f		FE file(s)
+	-l		List of FE files stored in a text file
+	-c		Comma-separated column names (no space between each!)
+
+FACULTATIVE OPTIONS :
+	--flag		Remove flagged probes ['.$flag.']
+	--nosat		Remove saturated probes ['.$nosat.']
+	--noY		Remove chrY ['.$noY.']
+	--nodupe	Remove duplicated probes ['.$nodupe.']
+	--sp		Select species (homo or mouse) ['.$sp.']
+	-n		Number of threads ['.$nt.']
+
+		
+
+EXAMPLE :
+"FEextract -f /proj/dvd/test/US\*.txt -c rMedianSignal,gMedianSignal --flag Y --noY N -n 4"
+
+NOTA :
+By default, without invoking the -c option, extracted columns are rMedianSignal and gMedianSignal.
+
+NOTA2 :
+As stated in the example, the script allows the use of special characters \'*\'
+and \'?\' to process on multiple files at the same time (and same location),
+but these characters require a \'\\\' to be used (a Perl limit...).
+
+NOTA3 : To build the list for the -l argument, use find :
+"find .. -name \'US*K2*.txt\' > list.txt"
+
+NOTA4 : Added multithreading thanks to the Parallel::ForkManager module. Use the
+new --nt option. The requirement for this module is mandatory, even if run monothreaded.
+Thus, the single-threaded version will be kept and rename as \'FEextract_old\', but
+won\'t be updated with the same pace. Always prefer this version.
+
+NOTA5 : Since 2015.01.13, default flags strategy has been modified so that xIsSaturated
+flag is not considered by default (thus, saturated probes are kept). It is possible to
+restore filtering out of saturated probes using the new option "--nosat Y".
+
+
+';
+	exit;
+}
+
+## On chomp le dernier argument;
+chomp($ARGV[$#ARGV]);
+
+my @colreq=('rMedianSignal', 'gMedianSignal');
+
+foreach my $ar (0..$#ARGV) {
+	chomp $ARGV[$ar];
+	if ($ARGV[$ar] eq '-f') { @inflist = (<$ARGV[$ar+1]>); }
+	elsif ($ARGV[$ar] eq '-l') {
+		$list = $ARGV[$ar+1];
+		open LIST, $ARGV[$ar+1] or exit("\n\nERROR !\n\nCan't open the filelist !\n\n");
+		@inflist = <LIST>;
+		close LIST;
+# 		print "\n\tLIST=".scalar(@inflist)."\n";		# check
+	}
+	if ($ARGV[$ar] eq '--flag') { $flag = $ARGV[$ar+1]; }
+	if ($ARGV[$ar] eq '--nosat') { $nosat = $ARGV[$ar+1]; }
+	if ($ARGV[$ar] eq '--noY') { $noY = $ARGV[$ar+1]; }
+	if ($ARGV[$ar] eq '--nodupe') { $nodupe = $ARGV[$ar+1]; }
+	if ($ARGV[$ar] eq '--sp') { $sp = $ARGV[$ar+1]; }
+	if ($ARGV[$ar] eq '-c') { @colreq = split /\,/, $ARGV[$ar+1]; }
+	if ($ARGV[$ar] eq '-n') { $nt = $ARGV[$ar+1]; }
+}
+
+if ( (scalar(@colreq) == 1) and ($colreq[0] eq 'default') ) {
+	print "\n\tUsing default mode !!!\n\t('rMedianSignal' and 'gMedianSignal' columns used)\n";
+	@colreq = ('rMedianSignal', 'gMedianSignal');
+}
+
+print "\nDiscarding flagged probes : ".$flag."\nRemove chrY : ".$noY."\nRemoving dupes : ".$nodupe."\n\n";
+
+if (@colreq == 0) { print "<<< NO COLUMN REQUESTED !\n    Only 'ProbeName', 'Chr', 'Start' and 'End' will be available >>>\n"; }
+elsif (@colreq == 1) { print @colreq." column requested.\n"; }
+else { print @colreq." columns requested.\n"; }
+
+
+if (@inflist == 0) {
+	print "\n<<< NO INPUT FILE FOUND ! >>>\n\n";
+	exit;
+}
+
+print "\n".@inflist." files to extract.\n\n";
+
+if ($nt > 1) {
+	$nt = scalar(@inflist) if (scalar(@inflist) < $nt);
+	print "\n".'Number of threads reduced to '.$nt.' ...';
+	my $pm = new Parallel::ForkManager($nt);
+	foreach my $f (@inflist) {
+		$pm->start and next;
+		&gofex($f);
+		$pm->finish;
+	}
+	$pm->wait_all_children;
+}
+elsif ($nt == 1) {
+	foreach my $f (@inflist) {
+		&gofex($f);
+	}
+}
+
+sub gofex {
+	my $file = shift @_;
+	my %colz=();
+	my @colreqind=();
+	my @header = ('ProbeName', 'Chr', 'Start', 'End');
+	my ($array_AMADID, $array_barcodeD);
+	my $febindex=-1;
+	my @BIGGY=();
+	chomp($file);
+	
+	print "\nReading file :\n".$file."\n";
+	
+	open FEIN, $file or die $!;
+	while (my $l = <FEIN>) {
+		$l =~ s/\n//;
+		$l =~ s/\r//;
+		
+		my @temp = split /\t/, $l;
+		
+		if ($l =~ /^FEPARAMS/) {
+			foreach my $t (0..$#temp) {
+				if ($temp[$t] eq 'FeatureExtractor_Barcode') {
+					$febindex = $t;
+					last;
+				}
+			}
+			next;
+		}
+		if ($febindex != -1) {
+			my $feb = $temp[$febindex];
+			my @usplit = split/\_/, $feb;
+			my $bignumber = $usplit[0];
+			$array_AMADID = "0".substr $bignumber, -10, 5;
+			$array_barcodeD = substr $bignumber, -5, 5;
+			
+			if (scalar(@usplit) > 0) {
+				$array_barcodeD = join("_", $array_barcodeD, @usplit[1..$#usplit]);
+			}
+			if ($array_barcodeD !~ /\_/) {
+				$array_barcodeD .= '_1_1';
+			}
+			
+			
+			print "\nArray AMADID is ".$array_AMADID."\nArray barcode is ".$array_barcodeD."\n\n";
+			$febindex = -1;
+			next;
+		}
+		
+		
+		if ($l =~ /^FEATURES/) {
+			print "Getting position index for required columns...\n";
+			TERMLINE1 : foreach my $term ('SystematicName', 'ControlType', 'gIsSaturated', 'rIsSaturated', 'ProbeName', 'gIsFeatNonUnifOL', 'rIsFeatNonUnifOL') {
+				foreach my $i (1..$#temp) {
+					if ($temp[$i] eq $term) {
+						$colz{$term} = $i;
+						print "\t'".$term."' found at col ".$colz{$term}.".\n";
+						next TERMLINE1;
+					}
+				}
+				print "<<< DAMNED ! Column '".$term."' not found !\n    HARAKIRI ! >>>\n";
+				die $!
+			}
+			
+			print "\nGetting position index for requested columns.\n";
+			my $t=0;
+			TERMLINE2 : while ($t <= $#colreq) {
+				my $term = $colreq[$t];
+				foreach my $i (1..$#temp) {
+					if ($temp[$i] eq $term) {
+						push @colreqind, $i;
+						push @header, $term;
+						print "\t'".$term."' found at col ".$i.".\n";
+						$t++;
+						next TERMLINE2;
+					}
+				}
+				## Si nom de colonne non trouv�, alors on n'utilise pas ce terme, et on le vire de @colreq (pour rester synchrone avec @colreqind);
+				print "<<< WARNING : column '".$term."' not found !\n    Column discarded ! >>>\n";
+				splice @colreq, $t, 1;
+				
+			}
+			
+			print "\nNow retrieving probes data...\n";
+		}
+		
+		if ($l =~ /^DATA\t[0-9]+\t[0-9]+\t[0-9]+\t/) {
+			
+			my $flagsum = 0;
+			
+			if ($flag eq 'Y') {
+# 				print "Flag discarded !\n";
+				if ($nosat eq 'Y') {
+					$flagsum = sum(@temp[$colz{'gIsSaturated'}, $colz{'rIsSaturated'}, $colz{'gIsFeatNonUnifOL'}, $colz{'rIsFeatNonUnifOL'}]);
+				}
+				else {
+					$flagsum = sum(@temp[$colz{'gIsFeatNonUnifOL'}, $colz{'rIsFeatNonUnifOL'}]);
+				}
+			}
+			
+			if ( ($temp[$colz{'SystematicName'}] =~ /^chr([0-9]+|X|Y)\:[0-9]+\-[0-9]+/i) and ($temp[$colz{'ControlType'}] == 0) and ($flagsum == 0) ) {
+				
+				my ($chr, $startend) = split /\:/, $temp[$colz{'SystematicName'}];
+				my ($start, $end) = split /\-/, $startend;
+				my $chrN = $chr;
+				$chrN = $chrom2chr{$sp}{$chrN};
+				
+				## Si on n'utilise pas le chrY, alors on passe � la sonde suivante;
+				if ( ($chr eq 'chrY') and ($noY eq 'Y') ) {
+					next;
+				}
+				
+				push @BIGGY, [ $temp[$colz{'ProbeName'}], $chrN, $start, $end, @temp[@colreqind] ];
+			}
+		}
+	}
+	close FEIN;
+	
+	print "\nBIGGY1 : ".@BIGGY."\n";
+	
+	if ($nodupe eq 'Y') {
+
+		my $b = 0;
+		my %tempB=();
+		while ($b <= $#BIGGY) {
+			if (exists $tempB{${$BIGGY[$b]}[0]}) {
+				splice @BIGGY, $b, 1;
+			}
+			else {
+				$tempB{${$BIGGY[$b]}[0]} = 1;
+				$b++;
+			}
+		}
+	}
+	
+	print "\nBIGGY2 : ".@BIGGY."\n";
+	
+	## Tri de @BIGGY sur chr -> start -> end;
+	@BIGGY = sort { ${$a}[1] <=> ${$b}[1] || ${$a}[2] <=> ${$b}[2] || ${$a}[3] <=> ${$b}[3] } @BIGGY;
+	
+	
+	## Sortie, tout le monde descend...
+	open COUT, ">".$array_AMADID.'_'.$array_barcodeD.".fex" or die $!;
+	print COUT join("\t", @header)."\n";
+	foreach my $b (0..$#BIGGY) {
+		print COUT join("\t", @{$BIGGY[$b]})."\n";
+	}
+	close COUT;
+}
+
+sub sum {
+	my $sum=0;
+	foreach (@_) {
+		$sum += $_;
+	}
+	return $sum;
+}

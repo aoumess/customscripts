@@ -1,0 +1,167 @@
+#!/usr/local/bin/perl
+use strict;
+
+my $version = '2.1 20110822';
+
+
+## VERSION NOTES
+##
+## 2.1	20110822
+##	. Changed options : now -sp (species) and -gb (genome build) instead of -hs or -mm (for human or mouse).
+##	. This modification solved a bug where mm output files had a "_hg" in their filename...
+## 2.0		20110123	. Ajout du support du génome souris
+## 1.0		2009xxxx	. Ajout d'une option d'output des séquences générées, par chromosome.
+## 0.2		2009xxxx	. Premiere release.
+
+
+
+## Gestion des arguments;
+foreach (@ARGV) {
+	chomp;
+}
+
+my $sp = '';
+my $gb = '';
+my $add = 0;
+my $seqout = 'N';
+
+if (scalar(@ARGV) == 0) {
+	print '
+GCget v'.$version.'
+ for GC% composition GETter script, with sequence output in fasta format.
+
+DESCRIPTION: This script gets a list of genomic positions in the form of
+a 4 columns text file ([identifier] [chrN] [start] [end], then computes the GC%
+of the sequence within the given coordinates. An option allows to get a larger
+sequence, adding N nucleotides to both ends. It also can be used for different
+genome builds. This special version exports the corresponding sequence as a FASTA
+file, to be used with the [restrict] of EMBOSS in my case.
+
+USAGE:
+ GCget file -sp [hs|mm] -gb [18|19|8|9] -add [integer] -seqout
+
+<file> A 4 columns text file without header. Structure :
+ ([identifier] [chrN] [start] [end]). Genomic positions must be in nucleotides.
+
+<-sp> The species (hs or mm).
+
+<-gb> The genome build (18 or 19 for hs, 9 for mm).
+
+<-add> Number of nucleotides to add to both genomic edges, for every given
+ genomic position. The option is omited by default. The given value must be
+ a positive integer !
+ Default is ['.$add.'] (nothing added).
+
+<-seqout> Output the extracted sequences in fasta format. One fasta file
+ generated for each chromosome.
+
+';
+exit;
+}
+
+my $infile = shift @ARGV;
+my %spconv = ('hs' => 'hg', 'mm' => 'mm');
+my %pathend = ('hg18' => 'hg18/', 'hg19' => 'current/', 'mm9' => 'currentmm/');
+
+foreach my $i (0..$#ARGV) {
+	if ($ARGV[$i] =~ /^-sp/) {
+		$sp = $ARGV[$i+1];
+	}
+	if ($ARGV[$i] =~ /^-gb/) {
+		$gb = $ARGV[$i+1];
+	}
+	elsif ($ARGV[$i] =~ /^-add/) {
+		$add = $ARGV[$i+1];
+	}
+	elsif ($ARGV[$i] =~ /^-seqout/) {
+		$seqout = 'Y';
+	}
+}
+
+## Checks
+my $gv = $conv{$sp}.$gb;
+if ( !exists $pathend{$gv}) { print "\n *ERROR* Could not understand the species and/or genome build.\n"; exit; }
+if ($add < 0)  { print "\n *ERROR* the -add value must be a positive integer.\n"; exit; }
+
+
+my $formerchr = '';
+print "Loading ".$infile." ...\n";
+my @chrfa = ();
+open IN, $infile or die $!;
+my @inbig = <IN>;
+close IN;
+print "Done.\n";
+
+my $linelength=0;
+
+open OUT, ">".$infile."_".$gv."_add".$add.".txt" or die $!;
+print OUT join("\t", 'Identifier', 'Chrom', 'Start', 'End', 'Nnum', 'GCnum', 'GC'.$add)."\n";
+
+foreach my $l (0..$#inbig) {
+	chomp $inbig[$l];
+	my @temp = split /\t/, $inbig[$l];
+	## Getting the sequence of the newest chromosome called, if any
+	if ($temp[1] ne $formerchr) {
+		print "\nLoading ".$temp[1]." sequence...\n";
+		open CHRFA, '/db/GoldenPath/'.$pathend{$gv}.'chromosomes/'.$temp[1].'.fa' or die $!;
+		@chrfa = <CHRFA>;
+		close CHRFA;
+		## Removing the header (1 line)
+		shift @chrfa;
+		foreach (@chrfa) { chomp; }
+		## getting the max linelength for this fasta file (should be 50);
+		$linelength = length($chrfa[0]);
+		$formerchr = $temp[1];
+		if ($seqout eq 'Y') {
+			if (OUT2) { close OUT2; }
+			open OUT2, ">".$infile."_".$gv."_add".$add."_SEQ_".$temp[1].".txt" or die $!;
+			print "Done.\n";
+		}
+	}
+	
+	my $chrlen = $#chrfa * $linelength + length($chrfa[$#chrfa]);
+	
+	## defining start
+	my $start = $temp[2] - $add;
+	## correcting start if negative
+	if ($start <1) { $start = 1; }
+	## defining end
+	my $end = $temp[3] + $add;
+	## correcting end if above the total chromosome length
+	if ($end > $chrlen) { $end = $chrlen; }
+	
+	my $width = $end - $start + 1;
+	
+	my $startline = sprintf("%i", $start/$linelength);
+# 	my $startline = floor($start/$linelength);
+	my $startchar = $start % $linelength;
+	my $endline = sprintf("%i", $end/$linelength);
+# 	my $endline = floor($end/$linelength);
+	my $endchar = $end % $linelength;
+	
+	my $charvec = join('', @chrfa[($startline-1)..($endline-1)]);
+	if ($endchar < 50) { $charvec = substr $charvec, 0, $endchar-$linelength; }
+	if ($startchar > 0) { $charvec = substr $charvec, $startchar-1; }
+	
+# 	my @fachunks = split /(.{50})/, $charvec;
+	my @fachunks  = unpack( "(a50)*", uc($charvec) );
+	print OUT2 join("_", '>'.$temp[0], $temp[1].':'.$start.'-'.$end)."\n";
+	print OUT2 join("\n", @fachunks)."\n";
+# 	foreach (@fachunks) {
+# 		print OUT2 $_;
+# 	}
+	
+	$charvec =~  s/N//gi;
+	my $nnum = $width - length($charvec);
+	$charvec =~  s/(A|T)//gi;
+	my $gcnum = length($charvec);
+	
+	my $gcpc = 0;
+	## Gestion du cas où on n'a que des N !
+	if ($width > $nnum) { $gcpc = sprintf("%.3f", $gcnum/($width-$nnum)); }
+	print OUT join("\t", @temp, $nnum, $gcnum, $gcpc)."\n";
+	
+	if ((($l % 10000) == 0) & ($l > 0)) { print "\t".$l." locations done !\n"; }
+}
+close OUT;
+if ($seqout eq 'Y') { close OUT2; }

@@ -1,0 +1,70 @@
+#!/usr/bin/perl
+use strict;
+
+## Description :	Script de conversion de format de fichiers *.p2c (sortie de comparaison de prob2comp.R)
+##			en tables *.cbs (sorties de segmentation CBS par DNAcopy, traités par GC5.R). Ceci dans le but
+##			de réutiliser les résultats de comparaisons prob2comp comme de nouveaux profils, et ainsi faire
+##			du différentiel de différentiel.
+##
+## Notes de version
+## 1.0		20120328	. Première version.
+
+
+my $version = '1.0 320120328';
+
+
+my @inflist=();
+# my $gtype='line';
+# my $sp = 'hs';
+# my $v = '19';
+# my $in='log2';
+# my $out='log2';
+
+## On chomp le dernier argument;
+if (@ARGV > 0) { chomp($ARGV[$#ARGV]); }
+@inflist = (<$ARGV[0]>);
+
+
+if ($inflist[0] eq '') {
+# 	print "\n<<< NO INPUT FILE FOUND ! >>>\n\n";
+	print '
+P2C2CBS v'.$version.'
+ for P2C table(s) to CBS table(s) converter.
+
+USAGE:
+"p2c2cbs [p2cfiles]"
+
+';
+	exit;
+}
+
+
+print "\n".@inflist." file(s) to convert.\n\n";
+
+
+
+foreach my $fil (@inflist) {
+	my $filename = $fil;
+	print 'Converting '.$filename." ...\n";
+	my $onam = $filename;
+	$onam =~ s/\.p2c$/.cbs/i;
+	my @lines = ();
+	my $snam = '';
+	open IN, $fil or die $!;
+	foreach my $l (<IN>) {
+		chomp $l;
+		my @temp = split /\t/, $l;
+		if ($temp[0] !~ 'Loc') {
+			$snam = $temp[1];
+			push @lines, [ @temp[1..6] ];
+		}
+	}
+	close IN;
+	
+	open OUT, ">".$onam;
+	print OUT join("\t", $snam, 'Chr', 'Start', 'End', 'Probes', 'Log2Ratio')."\n";
+	foreach my $l (0..$#lines) {
+		print OUT join ("\t", @{$lines[$l]})."\n";
+	}
+	close OUT;
+}

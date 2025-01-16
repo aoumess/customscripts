@@ -1,0 +1,337 @@
+#!/usr/bin/perl
+use strict;
+
+my $version = '1.2 20141017';
+
+## CnGbed
+##
+## DESCRIPTION
+##
+## This script numbers out the CnG words in a sequence, when giving it a bed file for coordinates.
+## (n being any nucleotide type). One can add some extend to these positions, as a list of lengthes
+## to add.Search is also performed on the CnG words, to mimic an opposite strand search.
+##
+## VERSION NOTES
+##
+## 1.2	20141020
+##	. Added support for rn (4,5,6).
+##	. Sequences are now fetched from /proj/cgh, not from /db/GoldenPath anymore.
+##	. Added POSIX compliance.
+##
+## 1.1	20121010
+##	. Corrected a bug in the support of non-human genomes, where gonosomes where still kept as chr23 and chr24...
+##	. Changed input file reading loop to WHILE.
+##
+## 1.0	20121901
+##	. First version, based on GCbed v1.1
+##
+
+
+
+## Gestion des arguments;
+map chomp, @ARGV;
+
+my %chrom2chr = (	'hs' => { 'chr1' => 1, 'chr2' => 2, 'chr3' => 3, 'chr4' => 4, 'chr5' => 5, 'chr6' => 6, 'chr7' => 7, 'chr8' => 8, 'chr9' => 9, 'chr10' => 10, 'chr11' => 11, 'chr12' => 12, 'chr13' => 13, 'chr14' => 14, 'chr15' => 15, 'chr16' => 16, 'chr17' => 17, 'chr18' => 18, 'chr19' => 19, 'chr20' => 20, 'chr21' => 21, 'chr22' => 22, 'chrX' => 23, 'chrY' => 24 },
+			'mm' => { 'chr1' => 1, 'chr2' => 2, 'chr3' => 3, 'chr4' => 4, 'chr5' => 5, 'chr6' => 6, 'chr7' => 7, 'chr8' => 8, 'chr9' => 9, 'chr10' => 10, 'chr11' => 11, 'chr12' => 12, 'chr13' => 13, 'chr14' => 14, 'chr15' => 15, 'chr16' => 16, 'chr17' => 17, 'chr18' => 18, 'chr19' => 19, 'chrX' => 20, 'chrY' => 21 },
+			'rn' => { 'chr1' => 1, 'chr2' => 2, 'chr3' => 3, 'chr4' => 4, 'chr5' => 5, 'chr6' => 6, 'chr7' => 7, 'chr8' => 8, 'chr9' => 9, 'chr10' => 10, 'chr11' => 11, 'chr12' => 12, 'chr13' => 13, 'chr14' => 14, 'chr15' => 15, 'chr16' => 16, 'chr17' => 17, 'chr18' => 18, 'chr19' => 19, 'chr20' => 20, 'chrX' => 21, 'chrY' => 24 });
+
+my %chr2chrom = ();
+foreach my $k (keys(%chrom2chr)) {
+	foreach my $c (keys(%{$chrom2chr{$k}})) {
+		$chr2chrom{$k}{$c} = $c;
+	}
+}
+
+my @add_cgh = (0, 100, 250, 500, 750, 1000, 2500, 5000, 10000, 50000, 100000);
+my @add_chip = (0, 100, 200, 300, 400, 500, 600, 1000, 5000, 10000, 50000, 100000);
+
+
+my $sp = 'hs';
+my $gb = 19;
+my $addmode = 'cgh';
+my @add=@add_cgh;
+my $proj = '/mnt/proj';
+my $nomh = 'Y';
+my $v = 'F';
+my $smod = 's';
+
+
+if (scalar(@ARGV) == 0) {
+	print '
+CnGbed v'.$version.'
+ for CnG-word count from BED files.
+
+DESCRIPTION: This script counts out the CnG (and GnC) words from an Agilent BED file,
+One can add a given set of windows adding genomic content at both ends of the genomic
+locations from the BED file. It also can be used for different species and genome builds.
+By default, probes with multiple genomic hits will be discarded.
+
+USAGE:
+ CnGbed file.bed --sp [hs|mm|rn] --gb [18|19|38|9|10|4|5|6] --add [cgh|chip|0,100,5000,...] --proj [path] --nomh [Y|N] --smod [n|s|hs|c] -v
+
+file.bed	A BED file from Agilent eArray
+
+OPTION	SHORTCUT
+--sp	-s	The species (hs or mm).['.$sp.']
+
+--gb	-g	The genome build (18|19|38 for hs, 9|10 for mm, 4|5|6 for rn). ['.$gb.']
+
+--add	-a	The set of windows sizes. Two included sets can be called : "cgh" which will use
+		these sizes (0, 100, 250, 500, 750, 1000, 2500, 5000, 10000, 50000, 100000),
+		and "chip" (0, 100, 200, 300, 400, 500, 600, 1000, 5000, 10000, 50000, 100000).
+		For custom values, just type the sizes with a coma as separator, without
+		backspaces. Ex: 0,100,5000. ['.$addmode.']
+
+--proj	-p	The pelican /proj mount point. ['.$proj.']
+
+--nomh	-n	Discard ProbeNames with multiple genomic hits. ['.$nomh.']
+
+--smod	-s	The scoring mode ['.$smod.']:
+		. [n] stands for "normal" : all word count equals 1.
+		. [s] stands for "squared" : all SINGLE word count equals 1, and count of contiguous
+		  words is squared.
+		. [hs] stands for "half-squared" : same as "squared" but the value for contiguous words
+		  count is (floored) half-squared.
+		. [c] cubed.
+
+-v		Verbose mode.
+
+EXAMPLE:
+ CnGbed 022060_4x180K_hg19_20100501.bed --sp hs --gb 19 --add cgh --proj /mnt/proj --smod n -v
+
+';
+exit;
+}
+
+my %spconv = ('hs' => 'hg', 'mm' => 'mm', 'rn' => 'rn');
+my %gvcheck = ('hg18' => 1, 'hg19' => 1, 'hg38' => 1, 'mm9' => 1, 'mm10' => 1, 'rn4' => 1, 'rn5' => 1, 'rn6' => 1);
+
+foreach my $i (0..$#ARGV) {
+	if ($ARGV[$i] =~ /^-(-sp|s)/) {
+		$sp = $ARGV[$i+1];
+	}
+	elsif ($ARGV[$i] =~ /^-(-gb|g)/) {
+		$gb = $ARGV[$i+1];
+	}
+	elsif ($ARGV[$i] =~ /^-(-add|a)/) {
+		if (lc($ARGV[$i+1]) eq 'cgh') {
+			@add = @add_cgh;
+		}
+		elsif (lc($ARGV[$i+1]) eq 'chip') {
+			@add = @add_chip;
+		}
+		else {
+			@add = split "\,", $ARGV[$i+1];
+		}
+	}
+	elsif ($ARGV[$i] =~ /^-(-proj|p)/) {
+		$proj = $ARGV[$i+1];
+	}
+	elsif ($ARGV[$i] =~ /^-v/) {
+		$v = 'T';
+	}
+	elsif ($ARGV[$i] =~ /^-(-smod|s)/) {
+		$smod = $ARGV[$i+1];
+	}
+}
+
+## Checks
+my $gv = $spconv{$sp}.$gb;
+if ( !exists $gvcheck{$gv}) { print "\n *ERROR* Could not understand the species and/or genome build.\n"; exit; }
+
+print "\nWorking on ".$gv.".\nAdding sizes : ".join(", ", @add)."\n";
+
+
+## Counting input files
+my $filelist = shift @ARGV;
+my @filez = `ls $filelist`;
+print "\n".@filez." file(s) found.\n\n";
+if (scalar(@filez) == 0) {
+	exit;
+}
+
+## Processing input files
+foreach my $infile (@filez) {
+	chomp $infile;
+	print "Working on ".$infile." :\n";
+	if (lc($nomh) eq 'n') { print "!! WARNING : MULTI-HITS PROBES WILL BE KEPT !!\n"; }
+	print "\tLoading data ...\n";
+	open IN, $infile or die $!;
+	my @big = ();
+	my %smark=();
+	
+	MARK : while (my $line  = <IN>) {
+		$line =~ s/\n//;
+		$line =~ s/\r//;
+		my @temp = split "\t", $line;
+		
+		if ($temp[0] =~ /^chr([0-9]+|X|Y)$/) {
+			
+			if (!exists $smark{$temp[3]}) {
+				$smark{$temp[3]} = [ [ @temp[3,0], $chrom2chr{$sp}{$temp[0]}, @temp[1,2] ] ];
+			}
+			else {
+				foreach my $h (0..$#{$smark{$temp[3]}}) {
+					if (${${$smark{$temp[3]}}[$h]}[3] == $temp[1]) {
+						next MARK;
+					}
+				}
+				push @{$smark{$temp[3]}}, [ @temp[3,0], $chrom2chr{$sp}{$temp[0]}, @temp[1,2] ];
+			}
+		}
+	}
+	close IN;
+	print "\tDone.\n";
+	
+	print "\nFound ".scalar(keys(%smark))." unique markers.\n";
+	
+	## Filtering out multi-hits
+	if (lc($nomh) eq 'y') {
+		if ($v eq 'T') { print "Finding multi-hits markers ...\n"; }
+		foreach my $m (keys(%smark)) {
+			if (scalar(@{$smark{$m}}) == 1) {
+				push @big, @{$smark{$m}};
+			}
+			elsif ($v eq 'T') {
+				print $m." has multi-hits:\n";
+				foreach my $h (0..$#{$smark{$m}}) {
+					print join("\t", @{${$smark{$m}}[$h]}[1,3,4])."\n";
+				}
+			}
+		}
+		print "Found ".scalar(@big)." unique single-hit markers.\n";
+	}
+	## (or not) !! Not recommanded !!
+	else {
+		foreach my $m (keys(%smark)) {
+			push @big, @{$smark{$m}};
+		}
+	}
+	## destroying %smark
+	foreach (keys(%smark)) {
+		delete $smark{$_};
+	}
+	undef %smark;
+	
+	## Sorting @big by chr => start => end
+	@big = sort { ${$a}[2] <=> ${$b}[2] || ${$a}[3] <=> ${$b}[3] || ${$a}[4] <=> ${$b}[4] } @big;
+	
+	## Processing by line (marker)
+	my $linelength=0;
+	my $formerchr = '';
+	my @chrfa = ();
+	my $chrlen=0;
+	
+	foreach my $l (0..$#big) {
+		
+		## Getting the sequence of the newest chromosome called, if any
+		if ($big[$l][1] ne $formerchr) {
+			print "\t\tLoading ".$big[$l][1]." sequence...\n";
+			open CHRFA, $proj.'/cgh/'.$gv.'/fasta/'.$big[$l][1].'.fa' or die $!;
+			@chrfa = <CHRFA>;
+			close CHRFA;
+			## Removing the header (1 line)
+			shift @chrfa;
+			foreach (@chrfa) { chomp; }
+			## getting the max linelength for this fasta file (should be 50);
+			$linelength = length($chrfa[0]);
+			$formerchr = $big[$l][1];
+			$chrlen = $#chrfa * $linelength + length($chrfa[$#chrfa]);
+			print "\t\tDone (".$linelength.", ".$formerchr.").\n";
+		}
+		
+		foreach my $wadd (@add) {
+			
+			## defining start
+			my $start = $big[$l][3] - $wadd;
+			## correcting start if negative
+			if ($start <1) { $start = 1; }
+			## defining end
+			my $end = $big[$l][4] + $wadd;
+			## correcting end if above the total chromosome length
+			if ($end > $chrlen) { $end = $chrlen; }
+			
+			
+			my $width = $end - $start + 1;
+			
+			my $startline = sprintf("%i", $start/$linelength);
+			my $startchar = $start % $linelength;
+			my $endline = sprintf("%i", $end/$linelength);
+			my $endchar = $end % $linelength;
+			
+			my $charvec = join('', @chrfa[($startline-1)..($endline-1)]);
+			if ($endchar < 50) { $charvec = substr $charvec, 0, $endchar-$linelength; }
+			if ($startchar > 0) { $charvec = substr $charvec, $startchar-1; }
+			
+			my @fachunks  = unpack( "(a50)*", uc($charvec) );
+			
+			$charvec =~ s/(C.G|G.C)/\*/gi;
+			
+			my @sres = split /\*/, $charvec;
+			
+			my $score = scalar(@sres);
+			$score--;
+			
+			if ($v eq 'T') {
+				print "\t",$score;
+			}
+			
+			my @multmat=();
+			if ($smod ne 'n') {
+				
+				$score -=  scalar(@multmat);
+				
+				my $mult=0;
+				
+				if ($#sres > 2) {
+					foreach my $sr (1..$#sres-1) {
+						if ($sres[$sr] eq '') {
+							$mult++;
+							if (($sres[$sr+1] ne '') or ($sr+1 == $#sres)) {
+								if ($sres[$sr+1] eq '') {
+									$mult++;
+								}
+								$mult++;
+								push @multmat, $mult;
+								$mult=0;
+							}
+						}
+					}
+				}
+				if ($smod eq 'hs') {
+					foreach my $mm (0..$#multmat) {
+						$score+= sprintf("%d",$multmat[$mm]**2/2);
+					}
+				}
+				elsif ($smod eq 's') {
+					foreach my $mm (0..$#multmat) {
+						$score+= sprintf("%d",$multmat[$mm]**2);
+					}
+				}
+				elsif ($smod eq 'c') {
+					foreach my $mm (0..$#multmat) {
+						$score+= sprintf("%d",$multmat[$mm]**3);
+					}
+				}
+			}
+			
+			push @{$big[$l]}, $score;
+			
+			
+		}
+		if ((($l % 1000) == 0) & ($l > 0)) { print "\t".sprintf("%.2f", ($l+1)/(scalar(@big)+1)*100)."% done.\n"; }
+	}
+	
+	my $outfile = $infile;
+	my $repword = "_".$gv.'.cng'.$smod;
+	$outfile =~ s/\.bed$/$repword/i;
+	
+	foreach my $ai (0..$#add) { $add[$ai] = 'CxG'.$smod.$add[$ai]; }
+	
+	open OUT, ">".$outfile or die $!;
+	print OUT join("\t", 'Identifier', 'Chrom', 'Chr', 'Start', 'End', @add)."\n";
+	foreach my $l (0..$#big) {
+		print OUT join("\t", @{$big[$l]})."\n";
+	}
+	close OUT;
+}

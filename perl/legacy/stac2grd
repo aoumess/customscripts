@@ -1,0 +1,348 @@
+#!/usr/bin/perl
+use strict;
+
+my $version = '1.1 20140912';
+
+## VERSION NOTES
+##
+## v1.1 20140912
+##	. Added multithreaded launch of grd using -n option.
+##	. Changed option names to be more POSIX-compliant.
+##	. Changed default minimal frequence from 10% to 5%.
+##
+## v1.0b 20121210
+##	. Switched source parsing from FOREACH to WHILE.
+##	. Purged some commented lines.
+##
+## v1.0 20111221
+##	. Renamed the script from minicr to stac2grd, as there are now 3 different tools that can be used for the MCR search (STAC, gaia, GISTIC2)
+##	. Added automatic call of grd (if available in the user PATH).
+##	. Changed output extension from .txt to .mstac.
+##	. Changed output filename a bit.
+##	. Renamed option -Nlim to -width.
+##	. Corrected a bug in the computing of the number of MCRs kept.
+##
+## VERSION NOTES FROM minicr
+##
+## v1.1 20110831
+##	. Modified the shebang, so that this script can be called from any unix system.
+##	. Added support for mus musculus.
+##
+## v1.0 20090227
+##	. Initial release. Made to support the new PROB format from tabgen.
+
+
+
+sub sum {
+	my @values = @_;
+	my $valsum = 0;
+	foreach (@values) {
+		$valsum += $_;
+	}
+	return $valsum;
+}
+
+sub avg {
+	my @values = @_;
+	my $valsum = sum(@values);
+	return($valsum / scalar(@values));
+}
+
+## CHROM to CHR converter
+my %chrom2chr = (	'hs' =>	{ 'chr1' => 1, 'chr2' => 2, 'chr3' => 3, 'chr4' => 4, 'chr5' => 5, 'chr6' => 6, 'chr7' => 7, 'chr8' => 8, 'chr9' => 9, 'chr10' => 10, 'chr11' => 11, 'chr12' => 12, 'chr13' => 13, 'chr14' => 14, 'chr15' => 15, 'chr16' => 16, 'chr17' => 17, 'chr18' => 18, 'chr19' => 19, 'chr20' => 20, 'chr21' => 21, 'chr22' => 22, 'chrX' => 23, 'chrY' => 24 },
+			'mm' =>	{ 'chr1' => 1, 'chr2' => 2, 'chr3' => 3, 'chr4' => 4, 'chr5' => 5, 'chr6' => 6, 'chr7' => 7, 'chr8' => 8, 'chr9' => 9, 'chr10' => 10, 'chr11' => 11, 'chr12' => 12, 'chr13' => 13, 'chr14' => 14, 'chr15' => 15, 'chr16' => 16, 'chr17' => 17, 'chr18' => 18, 'chr19' => 19, 'chrX' => 20, 'chrY' => 21 }	);
+
+my $freqmin = 0.05;
+my $conf = 0.95; 
+my $inputfile = '';
+my $repdir = 'null';
+my $width = 100;
+my $sp = 'hs';
+my $gb = 19;
+my $proj = '/mnt/proj/';
+my $db = '/mnt/db/';
+my $nt = 1;
+
+if (scalar(@ARGV) == 0) {
+	print '
+stac2grd v'.$version.'
+ for STAC results extractor to Genomic Regions Descriptor.
+
+DESCRIPTION: This scrit extracts statistically relevant regions
+   as MCRs from STAC output files. A PROB file (for the probes
+   positions) is also needed to get markers locations. Two output
+   files are generated, one per method in STAC (frequency confidence,
+   and footprint). The grd script is automatically called if available
+   in the user PATH environment variable.
+
+USAGE: stac2grd -d [path] -p [file.prob] --sp [hs|mm] -f [float+<1] -c [float+<1] -w [int>60] -n [int>0]
+
+	-d	A path to the directory hosting *.report files
+ 		from STAC. [default to current dir]
+	-p	The PROB file made along with the STAC datafiles by tabgen.
+	-f	Minimum frequency to consider a MCR, because the "C"
+ 		of MCR means "COMMON". So regions implying few % of
+		samples are not interesting. Please note that this
+		threshold is a global frequency. ['.$freqmin.']
+	-c	Minimum confidence of the statistic. ['.$conf.']
+	-w	Minimal width (in bp) for MCRs. ['.$width.']
+	--sp	Species. ['.$sp.']
+	--gb	Genome build. ['.$gb.']
+	--proj	Mount point to pelican:/proj. ['.$proj.']
+	--db	Mount point to pelican:/db. ['.$db.']
+	-n	Number of threads for multithreaded run. ['.$nt.']
+		
+NOTE1 :	Please note that the \'grd\' script can only be called if its path is
+	stored in the PATH variable environment...
+
+NOTE2 :	Options --sp, --gb, --proj, and --db are just passed to the grd script.
+
+';
+exit;
+}
+
+foreach (@ARGV) {
+	chomp;
+}
+
+foreach my $i (0..$#ARGV) {
+	if ($ARGV[$i] =~ /^-d$/i) { $repdir = $ARGV[$i+1]; }
+	elsif ($ARGV[$i] =~ /^-p$/i) { $inputfile = $ARGV[$i+1]; }
+	elsif ($ARGV[$i] =~ /^-f$/i) { $freqmin = $ARGV[$i+1]; }
+	elsif ($ARGV[$i] =~ /^-c$/i) { $conf = $ARGV[$i+1]; }
+	elsif ($ARGV[$i] =~ /^-w$/i) { $width = $ARGV[$i+1]; }
+	elsif ($ARGV[$i] =~ /^--sp$/i) { $sp = $ARGV[$i+1]; }
+	elsif ($ARGV[$i] =~ /^--gb$/)	{ $gb = $ARGV[$i+1]; }
+	elsif ($ARGV[$i] =~ /^--proj$/)	{ $proj = $ARGV[$i+1];	}
+	elsif ($ARGV[$i] =~ /^--db$/)	{ $db = $ARGV[$i+1];	}
+	elsif ($ARGV[$i] =~ /^-n$/)	{ $nt = $ARGV[$i+1];	}
+
+}
+
+## CHECK on input PROB file
+if (length($inputfile) == 0) {
+	print "\n\nERROR : No PROB file specified!\n\n";
+	exit;
+}
+## CHECK on input STAC files
+if ($repdir eq 'null') {
+	print "\n\nERROR : No path to the STAC reports specified!\n\n";
+	exit;
+}
+
+
+
+
+## CHECK on species and genome build support
+my %gvcheck = ('hg18' => 18, 'hg19' => 19, 'mm9' => 9);
+my %spconv = ('hs' => 'hg', 'mm' => 'mm');
+my $gv = $spconv{lc($sp)}.$gb;
+if (!exists $gvcheck{$gv}) { die "\nERROR : Unknown species or genome build !\n"; }
+else { print "Working on ".$gv."\n"; }
+
+my $tempifroot = (split /\//, $inputfile)[-1];
+my $ifroot = (split /\\/, $tempifroot)[-1];
+$ifroot =~ s/\.prob$//i;
+
+print "REPDIR : ".$repdir."\n";
+
+my @reports = `ls $repdir/*.report`;
+
+print '
+
+STAC reports directory : '.$repdir.'
+('.@reports.' reports found).
+Initial PROB file : '.$ifroot.'
+Minimal frequency : '.$freqmin.'
+Confidence cut-off : '.$conf.'
+MCR minimal width : '.$width.' bp
+Species : '.$sp.'
+Genome build : '.$gb.'
+';
+
+
+my %hash=();
+my @BIGin=();
+print "Getting probe positions ...\n";
+open PP, $inputfile;
+while (my $l=<PP>) {
+	$l=~s/\n//;
+	$l=~s/\r//;
+	push @BIGin, [ split /\t/, $_ ];
+}
+close PP;
+
+@BIGin = sort { ${$a}[2] <=> ${$b}[2] || ${$a}[3] <=> ${$b}[3] } @BIGin;
+
+foreach my $b (0..$#BIGin) {
+	my @temp = @{$BIGin[$b]};
+	if ( ($temp[0] !~ /^n$/i) and ($temp[0] !~ /^Probe/i) ) {
+		$hash{$temp[0]} = [ @temp[3,4] ];
+	}
+}
+close PP;
+
+my %imode = ( 'foot' => 3, 'freq' => 2 );
+my @ofiles = ();
+foreach my $mode ('foot', 'freq') {
+	
+	print "\n\t".'---> METHOD = '.$mode."\n\n";
+	
+	my $index = $imode{$mode};
+	my $id=0;
+	my @LIST=();
+	
+	foreach my $rep (@reports) {
+		
+		chomp $rep;
+		
+		my @lines=();
+		my $rf = (split /\//, $rep)[-1];
+		my ($chr, $type) = (split /\_/, $rf)[0..1];
+		
+		print "\t".$chr."\t".$type."\n";
+		
+		my $curchrom = $chr;
+		$curchrom =~ s/(q|p)//;
+		$curchrom = $chrom2chr{$sp}{$curchrom};
+		
+		open REP, $rep or die $!;
+		foreach (<REP>) {
+			chomp;
+			if ($_ !~ /^location\t/i) {
+				push @lines, [ split(/\t/, $_) ];
+			}
+		}
+		close REP;
+		
+		my $openflag=0;
+		my $probecounter=0;
+		my @feats=();
+		my @BOF=();
+		
+		my $formerfreq=0;
+	
+		foreach my $l (0..$#lines) {
+			
+			my @temp = @{$lines[$l]};
+			
+			$temp[0] =~ s/\s//g;
+			
+			## SOUS LE THRESHOLD -ET- FREQUENCE SUFFISANTE...
+			if ( ($temp[$index] <= (1-$conf)) and ($temp[1] > $freqmin) ) {
+				
+				$probecounter++;
+# 				push @goodfreqz, $temp[1];
+				
+				if ($l != $#lines) {
+					## PAS DE FENETRE OUVERTE...
+					if ($openflag == 0) {
+						$id++;
+						print "Frame ".$id." OPENED.\n";
+						@feats = ($curchrom, $temp[0], $hash{$temp[0]}[0], $temp[0], $hash{$temp[0]}[1], 1, ($hash{$temp[0]}[1] - $hash{$temp[0]}[0] + 1), lc($type), $temp[1], $temp[$index]);
+						$openflag++;
+						$formerfreq = $temp[1];
+					}
+					## FENETRE OUVERTE ...
+					else {
+						## VARIATION DE FREQUENCE : ON FERME ET ON OUVRE UNE AUTRE FENETRE !
+						if ( ($temp[1] != $formerfreq) and ($formerfreq ne 'null') ) {
+							
+							print "Frame ".$id." CLOSED (frequency changed).\n";
+							push @LIST, [ @feats ];
+							
+							$id++;
+							print "Frame ".$id." OPENED.\n";
+							$probecounter=1;
+							@feats = ($curchrom, $temp[0], $hash{$temp[0]}[0], $temp[0], $hash{$temp[0]}[1], $probecounter, ($hash{$temp[0]}[1] - $hash{$temp[0]}[0] + 1), lc($type), $temp[1], $temp[$index]);
+							$formerfreq = $temp[1];
+						}
+						## PAS DE CHANGEMENT DE FREQUENCE : ON AJOUTE LES INFOS DE LA SONDE EN COURS A LA REGION EN COURS.
+						else {
+							@feats[3..6] = ($temp[0], $hash{$temp[0]}[1], $probecounter, ($hash{$temp[0]}[1] - $feats[2] + 1));
+						}
+					}
+				}
+				## SI ON ARRIVE EN FIN DE LIGNE...
+				else {
+					## SI VARIATION DE FREQUENCE : ON FERME LA FENETRE EN COURS ET ON EN CREE UNE DERNIERE QU'ON FERME A SON TOUR !
+					print "Frame ".$id." CLOSED (EOF).\n";
+					push @LIST, [ @feats ];
+					
+					$probecounter=1;
+					$id++;
+					@feats = ($curchrom, $temp[0], $hash{$temp[0]}[0], $temp[0], $hash{$temp[0]}[1], 1, ($hash{$temp[0]}[1] - $hash{$temp[0]}[0] + 1), lc($type), $temp[1], $temp[$index]);
+					push @LIST, [ @feats ];
+					print "LAST Frame ".$id." created then closed (EOF).\n";
+				}
+			}
+			## PAS SOUS LE THRESHOLD OU FREQUENCE TROP FAIBLE...
+			## SI FENETRE OUVERTE, ALORS ON LA FERME.
+			elsif ($openflag == 1) {
+				print "Frame ".$id." CLOSED (Under threshold or minimum frequency).\n";
+				push @LIST, [ @feats ];
+				@feats = ();
+				$formerfreq = 'null';
+				$openflag = 0;
+				$probecounter = 0;
+			}
+		}
+	}
+	
+	@LIST = sort { ${$a}[0] <=> ${$b}[0] || ${$a}[2] <=> ${$b}[2] || ${$a}[4] <=> ${$b}[4] } @LIST;
+	
+	## Filtering out small regions
+	my @list2=();
+	foreach my $l (0..$#LIST) {
+		if ($LIST[$l][6] > $width) {
+			push @list2, [ @{$LIST[$l]} ];
+		}
+	}
+	foreach my $l (0..$#LIST) { delete $LIST[$l]; }
+	undef @LIST;
+	
+	my %statusconv = ('gain' => 'G', 'loss', => 'L', 'normal' => 'N');
+	
+	my $ofilnam <-uc($mode).'_'.$ifroot.'_R'.$#list2.'_fm'.$freqmin.'_c'.$conf.'_Nlim'.$width.'.mstac'; 
+	push @ofiles, $ofilnam;
+	open OUT, ">".$ofilnam or die $!;
+	print OUT "#Loc\tChr\tProbe_start\tStart\tProbe_end\tEnd\tNum_probes\tLength\tMCR_type\tFreq\tConf_".$mode."\n";
+	foreach my $l (0..$#list2) {
+		
+		$list2[$l][7] = $statusconv{$list2[$l][7]};
+		$list2[$l][8] = sprintf("%.3f", $list2[$l][8]);
+		$list2[$l][9] = sprintf("%.3f", (1-$list2[$l][9]));
+		
+		my $minichr = $list2[$l][0];
+		if ($sp eq 'hs') {
+			$minichr =~ s/23/X/;
+			$minichr =~ s/24/Y/;
+		}
+		elsif ($sp eq 'mm') {
+			$minichr =~ s/20/X/;
+			$minichr =~ s/21/Y/;
+		}
+		print OUT join("\t", 'chr'.$minichr.':'.$list2[$l][2].'-'.$list2[$l][4], @{$list2[$l]})."\n";
+	}
+	close OUT;
+}
+## Firing grd
+if (($nt > 1) and (scalar(@ofiles)>1)) {
+	use Parallel::ForkManager;
+	my $pm = new Parallel::ForkManager($nt);
+	foreach my $k (@ofiles) {
+		my $scmd = 'grd '.$k.' --sp '.$sp.' --gb '.$gb.' --proj '.$proj.' --db '.$db.' -m stac';
+		$pm->start and next;
+		`$scmd`;
+		$pm->finish;
+	}
+	$pm->wait_all_children;
+}
+else {
+	my $scmd = 'grd \\*_'.$ifroot.'_R\\*_fm'.$freqmin.'_c'.$conf.'_Nlim'.$width.'.mstac --sp '.$sp.' --gb '.$gb.' --proj '.$proj.' --db '.$db.' -m stac';
+	print "CMD : ".$scmd."\n";
+	`$scmd`;
+}
+
+
+

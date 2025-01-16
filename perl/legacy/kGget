@@ -1,0 +1,169 @@
+#!/usr/bin/perl
+use strict;
+
+my $version = '0.1 20100901';
+
+## DESCRIPTION
+##
+## This script gets coordinates of UCSC transcripts and exons from the 'knownGenes.hgXX'
+## datafile, then gets the corresponding genomic sequences and outputs it as a
+## multifasta file.
+##
+## VERSION NOTES
+##
+## 0.2 20111012
+##	. Changed the sheband so that the script could be called from pelican, or locally.
+##	. Added options to specify the mount points for /proj and /db (pelican).
+##
+## 0.1 20100901
+##	. Premiere release.
+
+
+## Functions
+my %chrom2chr = (	'chr1' => 1,
+				'chr2' => 2,
+				'chr3' => 3,
+				'chr4' => 4,
+				'chr5' => 5,
+				'chr6' => 6,
+				'chr7' => 7,
+				'chr8' => 8,
+				'chr9' => 9,
+				'chr10' => 10,
+				'chr11' => 11,
+				'chr12' => 12,
+				'chr13' => 13,
+				'chr14' => 14,
+				'chr15' => 15,
+				'chr16' => 16,
+				'chr17' => 17,
+				'chr18' => 18,
+				'chr19' => 19,
+				'chr20' => 20,
+				'chr21' => 21,
+				'chr22' => 22,
+				'chrX' => 23,
+				'chrY' => 24);
+
+my %chr2chrom = ();
+foreach my $c (keys(%chrom2chr)) {
+	$chr2chrom{$chrom2chr{$c}} = $c;
+}
+
+
+## Gestion des arguments;
+foreach (@ARGV) {
+	chomp;
+}
+
+my $hgvers = 19;
+my $proj = '/mnt/proj/';
+my $db = '/mnt/db/';
+# my $add = 0;
+# my $seqout = 'N';
+
+if (scalar(@ARGV) == 0) {
+	print '
+kGget v'.$version.'
+ knowngene sequence GETter
+
+DESCRIPTION: This script gets the UCSC genomic sequence for each exon of each
+ transcript, as defined by the knownGene.hgXX table from UCSC, then outputs it
+ as a multifasta file.
+
+USAGE:
+ kGget -hg [18|19] -proj /mnt/proj/ -db /mnt/db
+
+
+VERSION NOTE : Second version.
+';
+exit;
+}
+
+# my $infile = shift @ARGV;
+my %hgchk = (18 => 1, 19 => 1);
+my %hgpathend = (18 => 'hg18/', 19 => 'current/');
+my %kgfile = (18 => $proj.'/cgh/hg18/knownGene.hg18', 19 => $proj.'/cgh/hg19/knownGene.hg19');
+foreach my $i (0..$#ARGV) {
+	if ($ARGV[$i] =~ /^-hg/) {
+		$hgvers = $ARGV[$i+1];
+	}
+	if ($ARGV[$i] =~ /^-proj/) {
+		$proj = $ARGV[$i+1];
+	}
+	if ($ARGV[$i] =~ /^-db/) {
+		$db = $ARGV[$i+1];
+	}
+}
+
+if (!exists $hgchk{$hgvers}) { print "\n *ERROR* Could not understand the hg build version.\n"; exit; }
+
+
+print "Loading ".$kgfile{$hgvers}." ...\n";
+open IN, $kgfile{$hgvers} or die $!;
+my @inbig = <IN>;
+close IN;
+print "\tDone (".scalar(@inbig).").\n";
+
+## Dropping the header
+shift @inbig;
+
+
+my $linelength=0;
+my $formerchr = '';
+my @chrfa = ();
+
+open OUT, ">UCSC_Exon_Seq_hg".$hgvers or die $!;
+foreach my $l (0..$#inbig) {
+	chomp $inbig[$l];
+	my @temp = split /\t/, $inbig[$l];
+# 	my $chr = $chrom2chr{$temp[1]};
+	if ($temp[1] !~  /^chr([0-9]+|X|Y)$/) {
+		next;
+	}
+	## Getting the sequence of the newest chromosome called, if any
+	if ($temp[1] ne $formerchr) {
+		print "Loading ".$temp[1]." sequence...\n";
+		open CHRFA, $db.'/GoldenPath/'.$hgpathend{$hgvers}.'chromosomes/'.$temp[1].'.fa' or die $!;
+		@chrfa = <CHRFA>;
+		close CHRFA;
+		## Removing the header (1 line)
+		shift @chrfa;
+		foreach (@chrfa) { chomp; }
+		## getting the max linelength for this fasta file (should be 50);
+		$linelength = length($chrfa[0]);
+		$formerchr = $temp[1];
+		print "\tDone.\n";
+	}
+	my $chrlen = $#chrfa * $linelength + length($chrfa[$#chrfa]);
+	
+	
+	## Getting the list of exons coordinates for the current line
+	my $exs = $temp[8];
+	my $exe = $temp[9];
+	chop $exs;
+	chop $exe;
+	
+	my @exstarts = split /\,/, $exs;
+	my @exends = split /\,/, $exe;
+	
+	foreach my $e (0..$#exstarts) {
+		print OUT '>'.$temp[0].'|Exon'.($e+1).'|'.$temp[2].'|'.$temp[1].':'.$exstarts[$e].'-'.$exends[$e]."\n";
+		
+		my $startline = sprintf("%i", $exstarts[$e]/$linelength);
+		my $startchar = $exstarts[$e] % $linelength;
+		my $endline = sprintf("%i", $exends[$e]/$linelength);
+		my $endchar = $exends[$e] % $linelength;
+		
+		my $charvec = join('', @chrfa[($startline-1)..($endline-1)]);
+		if ($endchar < 50) { $charvec = substr $charvec, 0, $endchar-$linelength; }
+		if ($startchar > 0) { $charvec = substr $charvec, $startchar-1; }
+		
+		my @fachunks  = unpack( "(a50)*", uc($charvec) );
+		print OUT join("\n", @fachunks)."\n";
+	}
+	if ((($l % 10000) == 0) & ($l > 0)) { print "\t".$l." sequences retrieved !\n"; }
+}
+close OUT;
+	
+	

@@ -1,0 +1,2216 @@
+#!/usr/bin/perl
+use strict;
+
+my $version = '4.0c 20110831';
+
+## VERSION NOTES
+## +++++++++++++
+##
+## v4.0c 20110831	. Modified the shebang, so that this script can be called from any unix system.
+##
+## v4.0b 20110511	. Removed a bug which was calliing hg18 version info for miRNA when hg19 was called.
+##
+## v4.0 ->	. Ajout d'un nouveau mode '-comp' correspondant aux comparaisons de deux profils CGH, supportant
+##			  le format de fichier '*.c2c' en sortie du script CGH2comp2.R
+##
+## v3.6b ->	. Reversion pour les colorations de log2ratio : vert pour ampli, rouge pour délétion
+##			. Les seuils pour coloration ou mise en gras des log2ratios sont désormais paramétrables
+##			  via les options -gcol (couleur en gain) -lcol (couleur en perte) et -bold (mise en gras,
+##			  la valeur donnée étant considérée en valeur absolue).
+## v3.6 ->	. Ajout d'une balise '<BLINK>' pour mettre en évidence les gènes de fusion.
+##			. Correction de typo dans l'URL vers la CTD.
+##			. Utilisation des tables cpgIslandExt (source UCSC) de /mnt/proj/cgh plutôt que celles
+##			  de /db/GoldenPath renommées...
+##			. Correction de la table cpg.html corrompue du fait d'un changement de structure dans
+##			  l'ancien fichier source.
+##			. IDEE : Réflexion sur la possibilité d'inclure un surlignement de mots-clés dans les fonctions
+##			  de gènes ou dans les pathways. Le surlignement serait facile à introduire : 
+##			  <SPAN STYLE="background:#FFFFFF"> ... </SPAN>, maisle parsing et la gestion des chaînes de
+##			  caractère en Perl serait plus compliqué.
+## v3.5 ->	. Modification des paths des fichiers de données vers /mnt/proj/cgh. L'accès à ces données
+##			  devient donc public et sort de mon home ! (ne pas oublier de chmoder...)
+##			. Le build de génome par défaut devient hg19.
+## v3.4 ->	. Modification de la source des localisations, symboles et descriptions de gènes : les tables
+##			  knownGene et kgXref de téléchargées directement de l'UCSC (dans la bonne version de génome)
+##			  sont désormais utilisées en remplacement du fichier lkfunc.
+## v3.3c ->	. Modification du lien genecards (le mirroir Heidelberg n'existe plus). Retour au site primaire.
+## v3.3b ->	. Switch vers hg19 par défaut. hg18 reste disponible.
+## v3.3 ->	. Ajout des liens vers les fichiers d'annotation en version hg19.
+##			  La version par defaut reste pour l'instant hg18.
+##
+## v3.2 ->	. Ajout d'un nouveau code couleur pour les genes : ceux du Cancer Census (NCBI) en bleu ciel ("aqua").
+##			  Ceux-ci n'etant pas classes en tsup/onc, une seule couleur est appliquee, et seulement si le gene
+##			  n'est pas deja classe en tsup/onc dans l'Atlas. Ajout sur proposition du Pr. Pierre FOURET.
+##
+## v3.1 ->	. Nouvelle branche du script estampillee genrdescM, qui prend en charge les sorties de clicosel3
+##			  (nom provisoire), lui meme modifie depuis clicosel pour prendre en charge les sorties de
+##			  clicoMULTI, version modifiee de clicoTT.R pour prendre en charge automatiquement les tests T
+##			  pour 2 classes, et ANOVA pour multiclasses.
+##			. Prise en charge du nouveau format : plusieurs colonnes enlevees (Chr, Start, End, Probes) inutiles
+##			  ou redondantes (avec Loc) en sortie.
+##			. Simplification de la structure des fichiers de sortie : seuls 4 fichiers sont desormais generes
+##			  (1- index avec table principale; 2- table genes; 3- table CNV; 4- table miR). Ca permet un leger
+##			  gain d'espace disque, et surtout un nombre de fichiers genere beaucoup plus faible (auparavant,
+##			  souvent plusieurs milliers); bien plus facile a copier sur cle USB desormais ;)
+##			. Reflexion pour incorporation des data CpG Island (donnees dans :
+##			  /ws/annot/GoldenPath/current/database/cpgIslandExt.txt)
+##			. Le mode -solo est d�sormais totalement compatible ! La colonne Pval a �t� retir�e car d�sormais
+##			  inutile. IMPORTANT : dans le cas d'un profil avec de nombreuses aberrations, les pages HTML
+##			  des g�nes et des CNV peuvent �tre assez longues � parser par le butineur, et engendrer une assez
+##			  grosse consommation de RAM (en particulier sur firefox avec ses quelques leaks...), donc
+##			  il est d�conseill� d'ouvrir les fichiers g�n�r�s sur une petite machine !
+##
+## v2.3 ->	. Remplacement du 1er lien pour la table des miRNA, vers la base du Sanger (plus compl�te pour
+##			  les noms de miR immatures). Lien-type :
+##			  "http://microrna.sanger.ac.uk/cgi-bin/sequences/mirna_entry.pl?id="
+##
+## v2.2 ->	. Correction d'un des liens vers l'UCSC qui ne g�rait pas le build.
+##
+## v1.8b ->	. Modification des liens dynamiques vers DGV dont la structure de l'URL a chang� (d�c 2008).
+##
+## v1.8 ->	. Correction de bug : erreurs et plantages g�n�r�s par des 'chrN_random' conserv�s dans
+##			  genarray, d�sormais filtr�s.
+##			. Correction de bug : du fait d'une interversion  de variable pour boucle ($c et $r),
+##			  tout g�ne partiel � gauche d'une r�gion analys�e n'apparaissait pas !!
+##			. Am�lioration sans grande cons�quence : quelques >= et <= remplac�s par leurs valeurs
+##			  strictes > et <.
+##			. Correction du mauvais type de quote pour l'affichage de 'Reading file'.
+##			. Modifications cosm�tiques : modification de l'affichage du nb d'onco, tsup sur la
+##			  page principale : d�sormais en bold et taille de police inf�rieure, avec ajout
+##			  du nb de g�nes dans l'Atlas (onco et tsup non compris), avec le noir pour couleur.
+##
+## v1.7b ->	. Correction de bug : les valeurs n�gatives de log2ratio ne s'affichaient pas dans le
+##			  fichier pathrank2 (oubli du nom du outdev).
+##
+## v1.7 ->	. Ajout d'une liste des g�nes amplifi�s/d�l�t�s pour le mode SOLO.
+##			. Inversion de couleur (vert <-> rouge) oubli�e pour la table CHEM et les deux tables
+##			  PATHRANK.
+##			. Retrait des g�nes syst�matiquement en bold pour les tables CHEM, PATHRANK et
+##			  PATHRANK2. Sont d�sormais en bold les amplifi�s (>=1.5) ou d�l�t�s (<= -2).
+##			. Ajustement des tailles de colonnes pour alignement optimal sur la page de garde.
+##			  D�sormais, la somme des colonnes 'constantes' est 53%, et l'ajout des colonnes
+##			  'variables' doit faire arriver � 100% sous peine de mauvais alignement !
+##
+## v1.6b -> 	. Correction de mise en forme du lien vers la base DGV pour les g�nes des chr X et Y
+##			  (lien auparavant non fonctionnel car "23" et "24" utilis�s au lieu des "X" et "Y")
+##			. Inversion de couleur (vert <-> rouge) pour les log2ratios >= 1.5 (<= -1.5) pour respecter
+##			  l'inversion de couleur g�n�rale du statut gain / perte.
+##
+## v1.6 ->	. Ajout d'une nouvelle feuille HTML listant les g�nes-cibles aberrants d'une liste de
+##			  mol�cules, d�finie par V. Lazar.
+##
+## v1.5b ->	. Inversion du code couleur gain -> rouge, perte -> vert pour accord avec PhD.
+##
+## v1.5 ->	. Ajout des infos de pathway CTD (et adaptation des largeurs de colonnes en fonction).
+##			. Ajour d'un lien vers GeneCards sur la description du g�ne.
+##			. Ajout du nombre d'ONCO, TSUP, MULTI dans la table principale, en couleurs. Elargissement
+##			  de la colonne 'Genes' (6%) au d�triment de 'CNV' (4%) qui de toute fa�on �tait trop grande
+##			  pour le peu d'info � afficher.
+##			. Modification de l'affichage de 'Width' dans la table des genes, pour gain de place
+##			  (valeur arrondie et affichage de l'unit� : b, Kb, ou Mb).
+##			. Ajout d'une coloration du BODY pour la page g�ne, uniquement pour le mode 'solo',
+##			  en fonction du statu G ou L de la r�gion consid�r�e.
+##			. Ajout d'annotation cosm�tique du log2ratio pour le mode 'solo' : en gras si abs >= 0.75
+##			  + rouge si <= -2, ou vert si >= 1.5.
+##
+## v1.4 ->	. Ajout du mode 'solo' pour g�rer les fichiers issus de 'abr0grdl'.
+##
+## v1.3 ->	. Ajout du mode 'mcr' pour g�rer les fichiers issus du script 'minicr' ou 'microcr'.
+##
+
+
+
+my $time = time;
+
+
+my %chrom2chr = (	'chr1' => 1, 'chr2' => 2, 'chr3' => 3, 'chr4' => 4, 'chr5' => 5, 'chr6' => 6, 'chr7' => 7, 'chr8' => 8, 'chr9' => 9, 'chr10' => 10, 'chr11' => 11, 'chr12' => 12, 'chr13' => 13, 'chr14' => 14, 'chr15' => 15, 'chr16' => 16, 'chr17' => 17, 'chr18' => 18, 'chr19' => 19, 'chr20' => 20, 'chr21' => 21, 'chr22' => 22, 'chrX' => 23, 'chrY' => 24);
+
+my %chr2chrom = ();
+foreach my $c (keys(%chrom2chr)) {
+	$chr2chrom{$chrom2chr{$c}} = $c;
+}
+
+my @cancerkeywords = ('cancer', 'metasta', 'onco', 'carcinoma', 'melanoma', 'lymphoma', 'leukemia', 'sarcoma', 'neuroblastoma', 'glioma', 'jak-stat', 'wnt', 'erbb', 'EGF', 'NGF', 'PDGF', 'FGF', 'MAPK', 'PPAR', 'chromosome maintenance', 'histone', 'repair', 'polymerase', 'telomere', 'splic', 'replication', 'recombination', 'cyclin', 'cell cycle', 'apoptosis', 'p53', 'tnf', 'tumor necrosis', 'death', 'proteasome', 'autophagy', 'drug metabolism', 'ABC transporter', 'p450', 'homeobox', 's100');
+
+my %msbrand = (
+'methotrexate' => [ 'Abitrexate', 'Antifolan', 'Arbitrexate', 'Emtexate', 'Folex', 'Ledertrexate', 'Metatrexan', 'Methotrate', 'Mexate', 'Rheumatrex', 'Trexall' ],
+'pemetrexed' => [ 'Alimta' ],
+'fludarabine' => [ 'Fludara', 'Fludura' ],
+'fluorouracil' => [ '5 FU', 'Fluorouracil', 'Adrucil', 'Arumel', 'Carac', 'Carzonal', 'Effluderm', 'Efudex', 'Efudix', 'Efurix', 'FU', 'Fluoroblastin', 'Fluoroplex', 'Fluracil', 'Fluracilum', 'Fluri', 'Fluril', 'Fluro', 'Uracil', 'Ftoruracil', 'Kecimeton', 'Phthoruracil', 'Phtoruracil', 'Queroplex', 'Timazin', 'URF', 'Ulup' ],
+'capecitabine' => [ 'Xeloda' ],
+'gemcitabine' => [ 'DDFC', 'DFDC', 'GEO', 'Gemcin', 'Gemcitabina', 'Gemcitabine', 'HCl', 'Gemcitabine hydrochloride', 'Gemcitabinum', 'Gemtro', 'Gemzar' ],
+'cyclophosphamide' => [ 'ASTA', 'Asta B 518', 'CP', 'CPA', 'CTX', 'CY', 'Clafen', 'Claphene', 'Cyclophosphamid', 'Cyclophosphamide Monohydrate', 'Cyclophosphamide Sterile', 'Cyclophosphamidum', 'Cyclophosphan', 'Cyclophosphane', 'Cyclophosphoramide', 'Cyclostin', 'Cyklofosfamid', 'Cytophosphan', 'Cytoxan', 'Cytoxan', 'Lyoph', 'EndoxanEndoxan', 'R', 'Endoxan-Asta', 'Endoxana', 'Endoxanal', 'Endoxane', 'Enduxan', 'Genoxal', 'Hexadrin Lyophilized', 'Cytoxan', 'Mitoxan', 'Neosar', 'Procytox', 'Rcra', 'Waste', 'Number', 'U058', 'Revimmune', 'Semdoxan', 'Sendoxan', 'Senduxan', 'Zyklophosphamid' ],
+'ifosfamide' => [ 'Cyfos', 'Holoxan', '1000', 'IFEX', 'Ifex/Mesnex Kit', 'Ifosfamide/Mesna Kit', 'Isoendoxan', 'Mitoxana', 'Naxamide' ],
+'melphalan' => [ 'Alkeran', 'L-PAM', 'L-Phenylalanine mustard', 'L-Sarcolysin', 'L-Sarcolysine', 'L-Sarkolysin', 'Levofalan', 'Melfalan', 'Mephalan', 'Phenylalanine mustard', 'Phenylalanine nitrogen mustard', 'Sarcolysine', 'Sarkolysin' ],
+'carmustine' => [ 'Becenun', 'Bi CNU', 'BiCNU', 'Carmubris', 'Gliadel', 'Gliadel Wafer', 'Nitrumon' ],
+'fotemustine' => [ 'Muphoran' ],
+'carboplatin' => [ 'Paraplatin', 'Paraplatin-AQ' ],
+'cisplatin' => [ 'Abiplatin', 'Biocisplatinum', 'Briplatin', 'Carboquone', 'Cis Pt II', 'Cismaplat', 'Cisplatine', 'Cisplatyl', 'Citoplationo', 'Lederplatin', 'Neoplatin', 'Plastin', 'Platamine', 'Platiblastin', 'Platidiam', 'Platinex', 'Platinol', 'Platinol-AQ', 'Platinoxan', 'Randa' ],
+'oxaliplatin' => [ 'DACPLAT', 'Eloxatin', 'Elplat', 'Foloxatine', 'Transplatin' ],
+'busulfan' => [ 'Busulfex', 'Citosulfan', 'Leucosulfan', 'Mablin', 'Mielevcin', 'Mielosan', 'Mielucin', 'Milecitan', 'Mileran', 'Misulban', 'Mitosan', 'Mitostan', 'Myeleukon', 'Myeloleukon', 'Myelosan', 'Mylecytan', 'Myleran', 'Myleran Tablets' ],
+'procarbazine' => [ 'Matulane', 'Nathulane', 'Natulan', 'Natulan hydrochloride', 'Natulanar', 'Natunalar' ],
+'dacarbazine' => [ 'Deticene' ],
+'temozolomide' => [ 'Temodal', 'Temodar' ],
+'thiotepa' => [ 'Thioplex', 'Thiotepa' ],
+'ecteinascidin 743' => ['Trabectedin', 'ET-743', 'Yondelis'],
+'docetaxel' => [ 'Taxotere' ],
+'paclitaxel' => [ 'Epitaxol', 'LipoPac', 'Onxol', 'Paxceed', 'Paxene', 'Taxol', 'Taxol A', 'Vascular Wrap', 'Xorane' ],
+'vinblastine' => [ 'Nincaluicolflastine', 'Rozevin', 'Velban', 'Velbe', 'Vinblastin', 'Vinblastina', 'Vinblastine Sulfate', 'Vinblastinum', 'Vincaleucoblastin', 'Vincaleucoblastine', 'Vincaleukoblastine', 'Vincoblastine' ],
+'vincristine' => [ 'Marqibo', 'Onco TCS', 'Oncovin', 'Vincasar', 'Vincasar PFS', 'Vincrex', 'Vincristine Sulfate PFS', 'Vinkristin' ],
+'vinflunine' => [  ],
+'vindesine' => [ 'DAVA', 'Eldesine', 'Eldisine' ],
+'vinorelbine' => [ 'Navelbine', 'Navelbine Base' ],
+'epothilones' => [  ],
+'doxorubicin' => [ 'ADM', 'Adriablastin', 'Adriamycin', 'Adriamycin PFS', 'Adriamycin RDF', 'Adriamycin Semiquinone', 'Adriblastin', 'Adriblastina', 'Caelyx', 'DM2', 'Doxil', 'Doxo', 'Myocet', 'RDF Rubex', 'Resmycin', 'Rubex' ],
+'epirubicin' => [ 'Ellence', 'Epi-Dx', 'Epiadriamycin', 'Epidoxorubicin', 'Epirubicina', 'Epirubicine', 'Epirubicinum', 'IMI 28', 'Pharmorubicin Pfs', 'Pidorubicina', 'Pidorubicine', 'Pidorubicinum', 'Ridorubicin' ],
+'mitoxantrone' => [ 'Mitox', 'Novantron', 'Novantrone' ],
+'bleomycin' => [ 'Bleo', 'Bleonexane' ],
+'mitomycin' => [ 'Ametycin', 'Ametycine', 'Mit-C', 'Mito-C', 'Mitocin-C', 'Mitomycin C', 'Mitomycin-C', 'Mitomycinum', 'Mitomycinum C', 'Mitomycyna C', 'Mitozytrex', 'Muamycin', 'Mutamycin', 'Mytomycin', 'Mytozytrex' ],
+'hydroxyurea' => [ 'Biosupressin', 'Droxia', 'Hidrix', 'Hydrea', 'Hydreia', 'Hydura', 'Hydurea', 'Litaler', 'Litalir', 'Onco-Carbide', 'Oxyurea', 'Ureaphil' ],
+'camptothecin' => [  ],
+'topotecan' => [ 'Hycamptamine', 'Hycamptin', 'Hycamtin' ],
+'irinotecan' => [ 'CP0', 'Camptosar', 'IRINOTECAN', 'CPT-11' ],
+'etoposide' => [ 'Eposin', 'Etopophos', 'Lastet', 'Toposar', 'Vepesid', 'Vepesid J', 'Zuyeyidal' ],
+'bexarotene' => [ 'Targret', 'Targretin', 'Targretin-gel', 'Targretyn', 'Targrexin' ],
+'cetuximab' => [ 'Erbitux' ],
+'trastuzumab' => [ 'Herceptin ' ],
+'rituximab' => [ 'Rituxan ' ],
+'tositumomab' => [ 'Bexxar' ],
+'alemtuzumab' => [ 'Campath', 'MabCampath' ],
+'bevacizumab' => [ 'Avastin' ],
+'edrecolomab' => [ 'Panorex' ],
+'gemtuzumab' => [ 'Mylotarg' ],
+'axitinib' => [  ],
+'bosutinib' => [  ],
+'cediranib' => [ 'Recentin' ],
+'dasatinib' => [ 'Sprycel' ],
+'erlotinib' => [ 'Tarceva' ],
+'gefitinib' => [ 'Iressa', 'Irressat', 'Tarceva' ],
+'imatinib' => [ 'Gleevec', 'Glivec' ],
+'lapatinib' => [ 'Tycerb', 'Tykerb' ],
+'lestaurtinib' => [  ],
+'nilotinib' => [ 'Ketek' ],
+'semaxanib' => [  ],
+'sorafenib' => [ 'Nexavar' ],
+'sunitinib' => [ 'SU-11248', 'Sutent' ],
+'vandetanib' => [ 'Zactima' ],
+'temsirolimus' => [ 'Torisel' ],
+'everolimus' => [ 'Certican' ],
+'flavopiridol' => [ 'HMR-1275', 'Alvocidib' ],
+'roscovitine' => [ 'Seliciclib ' ],
+'aflibercept' => [ 'VEGF Trap' ],
+'denileukin diftitox' => [ 'Ontak' ],
+'arsenic trioxide' => [ 'Arsenite', 'Arsenolite', 'Arsodent', 'Claudelite', 'Claudetite', 'Trisenox' ],
+'bortezomib' => [ 'Velcade' ],
+'celecoxib' => [ 'Celebra', 'Celebrex' ],
+'colchicine' => [ 'Col-probenecid', 'Colbenemid', 'Condylon', 'Proben-C' ],
+'oblimersen' => [ 'Genasense', 'Augmerosen' ],
+'tegafur' => [ 'UFT' ],
+'tipifarnib' => [ 'Zarnestra' ],
+'vorinostat' => [ 'Zolinza' ]
+);
+
+
+my $ms = [
+	[ 'Nucleotides',
+		[ 'Nucleotides >> Antimetabolites',
+			[ 'Nucleotides >> Antimetabolites >> Folic acid',
+				[ 'methotrexate', ['DHFR', 'ALB'] ],
+				[ 'pemetrexed', ['TYMS', 'DHFR', 'GART'] ]
+			],
+			[ 'Nucleotides >> Antimetabolites >> Purine',
+				[ 'fludarabine', ['BCL2', 'RRM1', 'POLA1', 'STAT1', 'ADA'] ]
+			],
+			[ 'Nucleotides >> Antimetabolites >> Pyrimidine',
+				[ 'fluorouracil', ['TYMS', 'UPRT', 'DPYD'] ],
+				[ 'capecitabine', ['TYMS', 'DPYD'] ],
+				[ 'gemcitabine', ['TYMS', 'RRM1', 'CMPK'] ]
+			],
+		]
+	],
+	[ 'DNA',
+		[ 'DNA >> Alkylating agents',
+			[ 'DNA >> Alkylating agents >> Nitrogen mustards',
+				[ 'cyclophosphamide', [] ],
+				[ 'ifosfamide', ['DNMT1'] ],
+				[ 'melphalan', [] ]
+			],
+			[ 'DNA >> Alkylating agents >> Nitrosoureas',
+				[ 'carmustine', ['GSR'] ],
+				[ 'fotemustine', ['TXNRD1'] ]
+			],
+			[ 'DNA >> Alkylating agents >> Platinum',
+				[ 'carboplatin', ['ALB'] ],
+				[ 'cisplatin', [] ],
+				[ 'oxaliplatin', [] ],
+			],
+			[ 'DNA >> Alkylating agents >> Alkyl sulfonates',
+				[ 'busulfan', [] ]
+			],
+			[ 'DNA >> Alkylating agents >> Hydrazines',
+				[ 'procarbazine', [] ]
+			],
+			[ 'DNA >> Alkylating agents >> Triazenes',
+				[ 'dacarbazine', ['POLA2'] ],
+				[ 'temozolomide', [] ]
+			],
+			[ 'DNA >> Alkylating agents >> Aziridines',
+				[ 'thiotepa', [] ]
+			],
+			[ 'DNA >> Alkylating agents >> Other',
+				[ 'ecteinascidin 743', [] ]
+			]
+		],
+		[ 'DNA >> Spindle poisons / Mitotic inhibitors',
+			[ 'DNA >> Spindle poisons / Mitotic inhibitors >> Taxanes',
+				[ 'docetaxel', ['TUBB1', 'BCL2'] ],
+				[ 'paclitaxel', ['TUBB1', 'BCL2'] ]
+			],
+			[ 'DNA >> Spindle poisons / Mitotic inhibitors >> Vinca Alkaloids',
+				[ 'vinblastine', ['TUBB2A', 'ABCB1'] ],
+				[ 'vincristine', ['TUBB2A'] ],
+				[ 'vinflunine',  ['TUBB1'] ],
+				[ 'vindesine',  ['TUBB1'] ],
+				[ 'vinorelbine', ['TUBB2A'] ]
+			],
+			[ 'DNA >> Spindle poisons / Mitotic inhibitors >> Other',
+				[ 'epothilones', ['TUBB1', 'TUBB2A', 'TUBB4Q', 'TUBA3', 'TUBA8', 'TUBB2C', 'TUBA6', 'TUBA1', 'TUBB4', 'TUBB3', 'TUBA2'] ]
+			]
+		],
+		[ 'DNA >> Cytotoxic / Antitumor antibiotics',
+			[ 'DNA >> Cytotoxic / Antitumor antibiotics >> Anthracyclines',
+				[ 'doxorubicin', ['TOP2A'] ],
+				[ 'epirubicin', ['CHD1', 'TOP2A'] ]
+			],
+			[ 'DNA >> Cytotoxic / Antitumor antibiotics >> Anthracenediones',
+				[ 'mitoxantrone', ['TOP2A', 'ABCG2'] ]
+			],
+			[ 'DNA >> Cytotoxic / Antitumor antibiotics >> Streptomyces',
+				[ 'bleomycin', ['LIG3', 'LIG1'] ],
+				[ 'mitomycin', [] ]
+			],
+			[ 'DNA >> Cytotoxic / Antitumor antibiotics >> Other',
+				[ 'hydroxyurea', ['RRM1'] ]
+			]
+		],
+		[ 'DNA >> Topoisomerase inhibitors',
+			[ 'DNA >> Topoisomerase inhibitors >> Camptotheca',
+				[ 'camptothecin', ['TOP1'] ],
+				[ 'topotecan', ['TOP1MT', 'TOP1', 'ABCG2'] ],
+				[ 'irinotecan', ['TOP1MT', 'TOP1'] ]
+			],
+			[ 'DNA >> Topoisomerase inhibitors >> Podophyllum',
+				[ 'etoposide', ['TOP2A', 'MAP2K7'] ]
+			]
+		],
+		[ 'DNA >> Other',
+			[ 'DNA >> Other >> All',
+				[ 'bexarotene', ['RXRB'] ]
+			]
+		]
+	],
+	[ 'Cellular',
+		[ 'Cellular >> CI monoclonal antibodies',
+			[ 'Cellular >> CI monoclonal antibodies >> Receptor tyrosine kinase',
+				[ 'cetuximab',  ['EGFR'] ],
+				[ 'trastuzumab',  ['ERBB2', 'EGFR'] ]
+			],
+			[ 'Cellular >> CI monoclonal antibodies >> Anti-CD20',
+				[ 'rituximab',  ['MS4A1'] ],
+				[ 'tositumomab',  ['MS4A1'] ]
+			],
+			[ 'Cellular >> CI monoclonal antibodies >> Other',
+				[ 'alemtuzumab',  ['CD52'] ],
+				[ 'bevacizumab',  ['VEGFA'] ],
+				[ 'edrecolomab',  ['TACSTD1'] ],
+				[ 'gemtuzumab',  ['CD33'] ]
+			]
+		],
+		[ 'Cellular >> Tyrosine kinase inhibitors',
+			[ 'Cellular >> Tyrosine kinase inhibitors >> All',
+				[ 'axitinib',  ['FLT1', 'KDR', 'FLT4', 'PDGFRA', 'PDGFRB', 'KIT'] ],
+				[ 'bosutinib',  ['BCR', 'ABL1', 'SRC'] ],
+				[ 'cediranib',  ['FLT1', 'FLT4'] ],
+				[ 'dasatinib',  ['BCR', 'ABL1', 'SRC', 'PDGFRB', 'ABL2', 'KIT', 'FYN', 'YES1', 'EPHA2', 'LCK', 'STAT5B'] ],
+				[ 'erlotinib', ['EGFR'] ],
+				[ 'gefitinib', ['EGFR'] ],
+				[ 'imatinib', ['ABL1', 'PDGFRB', 'KIT', 'PDGFRA', 'CSF1R', 'ABCB1', 'NTRK1', 'ABCG2', 'DDR1'] ],
+				[ 'lapatinib', ['ERBB2', 'EGFR'] ],
+				[ 'lestaurtinib',  ['FLT3'] ],
+				[ 'nilotinib',  ['BCR', 'ABL1', 'PDGFRA', 'PDGFRB', 'KIT'] ],
+				[ 'semaxanib',  ['KDR'] ],
+				[ 'sorafenib', ['FLT4', 'RAF1', 'FLT3', 'PDGFRB', 'KDR', 'KIT', 'BRAF'] ],
+				[ 'sunitinib',  ['KDR', 'PDGFRA', 'PDGFRB', 'KIT', 'FLT3', 'FLT4', 'FLT1', 'CSF1R', 'RET', 'BRAF', 'RAF1'] ],
+				[ 'vandetanib',  ['KDR', 'EGFR'] ]
+			]
+		],
+		[ 'Cellular >> mTOR inhibitors',
+			[ 'Cellular >> mTOR inhibitors >> All',
+				[ 'temsirolimus',  ['FRAP1'] ],
+				[ 'everolimus', ['FRAP1'] ]
+			]
+		],
+		[ 'Cellular >> Cyclin-dependant kinase inhibitors',
+			[ 'Cellular >> Cyclin-dependant kinase inhibitors >> All',
+				[ 'flavopiridol', ['EGFR', 'CDK5', 'CDC2', 'CDK2', 'PYGM', 'CDK7', 'CDK9', 'CDK6', 'CDK4', 'CDK8'] ],
+				[ 'roscovitine', [] ]
+			]
+		],
+		[ 'Cellular >> Other',
+			[ 'Cellular >> Other >> All',
+				[ 'aflibercept',  ['VEGFA'] ],
+				[ 'denileukin diftitox', ['IL2RA', 'IL2RB', 'IL2RG'] ]
+			]
+		]
+	],
+	[ 'Other / Ungrouped',
+		[ 'Other / Ungrouped >> Other',
+			[ 'Other / Ungrouped >> Other >> Other',
+				[ 'arsenic trioxide', ['ATP2C1', 'PML', 'RARA', 'AKT1', 'IL6', 'MAPK1', 'ERGIC2', 'CCND1', 'ABCB1', 'JUN', 'MAPK3', 'IKBKB', 'ATP2C1'] ],
+				[ 'bortezomib', ['PSMD1', 'PSMD2', 'PSMB1', 'PSMB5', 'PSMB2'] ],
+				[ 'celecoxib', ['PTGS2', 'PDPK1'] ],
+				[ 'colchicine', ['TUBB1', 'TUBB2A', 'MEFV', 'ABCB1'] ],
+				[ 'oblimersen', [] ],
+				[ 'tegafur', [] ],
+				[ 'tipifarnib', [] ],
+				[ 'vorinostat', [ 'HDAC8', 'HDAC1', 'HDAC2', 'HDAC3', 'HDAC6'] ]
+			]
+		]
+	]
+];
+
+## Ou mettre aplidin ??
+
+# 				'aplidine'			=> ['RAC1']
+
+
+
+
+
+# my @chemlist= sort(map(lc($_),keys(%chemz)));
+
+
+
+## TICDB : http://www.unav.es/genetica/TICdb/results.php?hgnc=BCR
+## CTD : http://ctd.mdibl.org/detail.go?type=gene&db=GENE&acc=581 (les ID peuvent �tre obtenus depuis le fichier CTD de Philippe
+## GENECARDS : http://www.genecards.org/cgi-bin/carddisp.pl?gene=CCND1
+## mirdb (fiche) : http://mirdb.org/wiki/index.php5?title=Hsa-miR-200b
+## mirdb (targets) : http://mirdb.org/cgi-bin/search.cgi?searchType=miRNA&searchBox=hsa-miR-200b&full=1
+## mirdb (target pathways) : http://mirdb.org/cgi-bin/pathway.cgi?mirna=hsa-miR-200b
+
+
+my %hgcheck = ( 17 => 1, 18 => 1, 19 => 1);
+
+my $hg = 19;
+my $mode = 'norm';
+my $chem = 'N';
+my $fsort = 'loc';
+my $l2m = 0;
+my $gcol= 1;
+my $lcol = -1;
+my $bold = 0.65;
+
+if (scalar(@ARGV) == 0) {
+	print '
+GENRDESC v'.$version.'
+ for GENome Regions DESCriptor.
+
+DESCRIPTION: This script takes a list of genomic regions as input,
+ and returns an HTML-based structure with genomic annotations of
+ these given regions, included sorted included genes (fully or
+ partially), miRNAs and CNVs, as well as links to academic DBs.
+
+USAGE:
+ genrdesc [file] -hg [17|18|19] -mode [cc|mcr|solo|comp] -sort [loc|rawp|freq] -chem [Y|N] -l2m [+val] -gcol [+val] -lcol [-val] -bold [+val]
+
+<file> A list of genomic regions, using the official syntax
+ (chr?:?????????-?????????), one item per line. Header is tolerated
+ as lines beginning with a \'#\' are discarded. Several files can
+ be processed in one run, see NOTE2.
+
+<-hg> The UCSC Human Genome build to use [17|18|19].
+ Default is ['.$hg.'].
+
+<-mode> Use this option if the input is an output result from
+ other scripts (containing more annotations than the genomic
+ locations. It will make use of other available columns.
+ You can use 
+	\'cc\' to annotate results from the [clicosel] script.
+	\'mcr\' to annotate results from the [minicr] script.
+	\'solo\' to annotate results from the [abr0togrdM] script.
+	\'comp\' to annotate results from the [CGH2comp2.R] script.
+ Just don\'t call <-mode> if you want to annotate regions the
+ classical way, without other annotation.
+ Default is ['.$mode.'].
+
+<-sort> By default, regions displayed in the HTML pack are sorted
+ according to their genomic location. However, for some analysis,
+ it is interesting to rank the regions according to their
+ statistical value. So they can now be ranked by their increasing
+ P-value when the \'cc\' mode is used (-sort rawp), or their
+ decreasing frequency when the \'mcr\' mode is used (-sort freq).
+ Here are the possibilities :
+ 	    NO MODE		-sort [loc]
+ 	    -mode cc		-sort [loc|rawp]
+ 	    -mode mcr		-sort [loc|freq]
+ 	    -mode solo		-sort [loc|l2r]
+	    -mode comp		-sort [loc|adiff|rdiff] (not implemented yet)
+ Default is ['.$fsort.'].
+
+<-chem> Generate the chemicals results pages (ONLY AVAILABLE
+ FOR SOLO MODE!). Default is ['.$chem.'].
+ 
+<-l2m> Minimal absolute value of log2(ratio) to be output
+ (ONLY AVAILABLE FOR SOLO MODE!). Default ['.$l2m.']
+
+<-gcol> Positive log2(ratio) cut-off from which a coloration will
+ be applied on gains. Default ['.$gcol.']
+
+<-lcol> Negative log2(ratio) cut-off from which a coloration will
+ be applied on losses. Default ['.$lcol.']
+
+<-bold> Positive log2(ratio) cut-off from which a bold effect will
+ be applied on gains and losses. Default ['.$bold.']
+
+NOTE1 : Currently this version can be used with hg17, 17 and 19
+ UCSC Human Genome build versions. Mus Musculus not yet
+ implemented.
+
+NOTE2 : To process multiple files in one run, you can use the
+ \'\#\' and \'\?\' special characters in the filename. To be
+ interpreted as a special character by the script, the backslash
+ is required !
+
+VERSION NOTE : Added the -c2c mode for the comparison of two
+ CGH profiles !
+';
+exit;
+}
+
+
+## Gestion des arguments;
+foreach (@ARGV) {
+	chomp;
+}
+
+my $infile = shift @ARGV;
+
+my %modechk = ( 'norm' => 1, 'cc' => 1, 'mcr' => 1, 'solo' => 1, 'comp' => 1 );
+
+foreach my $i (0..$#ARGV) {
+	if ($ARGV[$i] =~ /^-hg/) {
+		$hg = $ARGV[$i+1];
+	}
+	elsif ($ARGV[$i] =~ /^-mode/) {
+		$mode = $ARGV[$i+1];
+	}
+	elsif ($ARGV[$i] =~ /^-sort/) {
+		$fsort = $ARGV[$i+1];
+	}
+	elsif ($ARGV[$i] =~ /^-chem/) {
+		$chem = $ARGV[$i+1];
+	}
+	elsif ($ARGV[$i] =~ /^-l2m/) {
+		$l2m = $ARGV[$i+1];
+	}
+	elsif ($ARGV[$i] =~ /^-gcol/) {
+		$gcol = $ARGV[$i+1];
+	}
+	elsif ($ARGV[$i] =~ /^-lcol/) {
+		$lcol = $ARGV[$i+1];
+	}
+	elsif ($ARGV[$i] =~ /^-bold/) {
+		$bold = $ARGV[$i+1];
+	}
+}
+
+## Controle de la syntaxe de l'option -mode;
+if (!exists $modechk{$mode}) {
+	print "\nWARNING : Mode not understood ! Switching to the normal mode !\n";
+	$mode = 'norm';
+}
+
+## Contr�le des param�tres;
+if (!exists $hgcheck{$hg}) {
+	die "\nERROR : Unknown hg version !\n";
+}
+
+## Controle de l'option -sort;
+if ($fsort ne 'loc') {
+	if ( ($fsort eq 'rawp') and ($mode eq 'cc') ) {
+		print "\n\tSorting CC regions according to their raw P-value !\n";
+	}
+	elsif ( ($fsort eq 'adjp') and ($mode eq 'cc') ) {
+		print "\n\tSorting CC regions according to their adjusted P-value !\n";
+	}
+	elsif ( ($fsort eq 'freq') and ($mode eq 'mcr') ) {
+		print "\n\tSorting MCR regions according to their frequency !\n";
+	}
+	elsif ( ($fsort eq 'rdiff') and ($mode eq 'comp') ) {
+		print "\n\tSorting C2C regions according to their RELATIVE lo2(ratio) difference !\n";
+	}
+	elsif ( ($fsort eq 'adiff') and ($mode eq 'comp') ) {
+		print "\n\tSorting C2C regions according to their ABSOLUTE lo2(ratio) difference !\n";
+	}
+	else {
+		print "\nWARNING : sorting argument not understood ! Stopping process !\n";
+	}
+}
+
+
+# print "CHEM : ".$chem."\n";
+my @filez = `ls $infile`;
+print "\n".@filez." file(s) found.\n";
+if (scalar(@filez) == 0) {
+	exit;
+}
+
+# open NUM, ">".@filez or die $!;
+# close NUM;
+
+
+## Initialisation des valeurs nulles pour les diff�rentes annotations, qui servent aussi de contr�le si jamais les fichiers source sont vides.
+my $ctdctrl = '-';
+my $ctdpctrl = '-';
+my $fusctrl = '-';
+my $cnvctrl = '-';
+my $mirctrl = '-';
+my $cpgctrl = '-';
+
+# my %coltype = ( 'N' => '#C0C0C0', 'G' => '#90EE90', 'L' => '#FF6347', 'A' => 'yellow');
+# my %bgcoltype = ( 'G' => '#CBF1CA', 'L' => '#F0C9C6' );
+
+my %coltype = ( 'N' => '#C0C0C0', 'L' => '#FF6347', 'G' => '#90EE90', 'A' => 'yellow');
+my %bgcoltype = ( 'L' => '#F0C9C6', 'G' => '#CBF1CA' );
+
+## On importe les infos des bandes cyto;
+my %Cytohash = ( 17 => '/mnt/proj/annot/44KAgiHumCGH/cytoBand_hg17.txt', 18 => '/mnt/proj/annot/44KAgiHumCGH/cytoBand_hg18.txt', 19 => '/mnt/proj/annot/44KAgiHumCGH/cytoBand_hg19.txt' );
+print "\nImporting UCSC CytoBands data ...\n";
+my @cytoarray=();
+open INCYTO, $Cytohash{$hg} or die $!;
+foreach (<INCYTO>) {
+	chomp;
+	my @temp = split /\t/, $_;
+	my $chrA = shift @temp;
+	$chrA =~ s/chr//;
+	my $chrN = $chrA;
+	$chrN =~ s/X/23/;
+	$chrN =~ s/Y/24/;
+	push @{$cytoarray[$chrN-1]}, [ $chrA, @temp ];
+}
+close INCYTO;
+
+foreach my $c (0..$#cytoarray) {
+	@{$cytoarray[$c]} = sort { ${$a}[1] <=> ${$b}[1] } @{$cytoarray[$c]};
+}
+
+
+
+#############################
+### GENEBLOCK CLUSTER : START
+#############################
+## On importe les données des knownGenes et kgXref
+# my %kgh = ( 17 => '/export/home/job/data/hg17/knownGene.hg17', 18 => '/export/home/job/data/hg18/knownGene.hg18', 19 => '/export/home/job/data/hg19/knownGene.hg19' );
+# my %kgXh = ( 17 => '/export/home/job/data/hg17/kgXref.hg17', 18 => '/export/home/job/data/hg18/kgXref.hg18', 19 => '/export/home/job/data/hg19/kgXref.hg19' );
+
+my %kgh = ( 17 => '/mnt/proj/cgh/hg17/knownGene.hg17', 18 => '/mnt/proj/cgh/hg18/knownGene.hg18', 19 => '/mnt/proj/cgh/hg19/knownGene.hg19' );
+my %kgXh = ( 17 => '/mnt/proj/cgh/hg17/kgXref.hg17', 18 => '/mnt/proj/cgh/hg18/kgXref.hg18', 19 => '/mnt/proj/cgh/hg19/kgXref.hg19' );
+
+print "Importing knownGene data ...\n";
+
+my %ucsc = ();
+open KGIN, $kgh{$hg} or die $!;
+foreach my $k (<KGIN>) {
+	chomp;
+	if ($k !~ /^\#/) {
+		my @temp = split /\t/, $k;
+		if ($temp[1] =~ /^chr([0-9]+|X|Y)$/) {
+			$ucsc{$temp[0]} = [ $chrom2chr{$temp[1]}, @temp[3,4] ];		## chr, TXstart, TXend
+		}
+	}
+}
+close KGIN;
+print "\t".keys(%ucsc)." UCSC clean kG transcripts found.\n";
+
+print "Importing HGNC Hugo symbols ...\n";
+my %hgnc=();
+# open HGNC, '/export/home/job/data/HGNC_Hugo.txt' or die $!;
+open HGNC, '/mnt/proj/cgh/HGNC_Hugo.txt' or die $!;
+foreach my $h (<HGNC>)  {
+	chomp;
+	if ($h !~ /^HGNC ID/) {
+		my @temp = split /\t/, $h;
+		if ($temp[3] eq 'Approved') {
+			$hgnc{$temp[1]} = $temp[2];
+		}
+	}
+}
+close HGNC;
+print "\t".keys(%hgnc)." approved symbols found.\n";
+
+print "Importing kgXref data ...\n";
+my %ucscX = ();
+open KGXIN, $kgXh{$hg} or die $!;
+foreach my $k (<KGXIN>) {
+	chomp;
+	if ($k !~ /^\#/) {
+	my @temp = split /\t/, $k;
+		if ( (exists $ucsc{$temp[0]}) and (exists($hgnc{$temp[4]})) ) {
+			push @{$ucscX{$temp[4]}}, [ (@{$ucsc{$temp[0]}}, $hgnc{$temp[4]}) ];		## chr, TXstart, TXend
+		}
+	}
+}
+close KGIN;
+
+print "\t".keys(%ucscX)." symbols localized.\n";
+
+
+print "Clusterizing transcripts ...\n";
+
+my %genhash=();
+foreach my $sym (keys %ucscX) {
+	if (scalar @{$ucscX{$sym}} == 1) {
+		$genhash{$sym} = [ @{$ucscX{$sym}} ];
+# 		print "chr : ".${${$ucscX{$sym}}[0]}[0]."\n";
+# 		push @{$genarray[${${$ucscX{$sym}}[0]}[0]-1]}, [ $sym, @{${$ucscX{$sym}}[0]} ];
+	}
+	else {
+		my @tempo=();
+		my @curlocz = @{$ucscX{$sym}};
+		## Tri de @curlocz par chr croissants, puis start croissants, puis end décroissants;
+		@curlocz = sort { ${$a}[0] <=> ${$b}[0] || ${$a}[1] <=> ${$b}[1] || ${$b}[2] <=> ${$a}[2] } @curlocz;
+# 		push @tempo, [ shift(@curlocz) ];
+		push @tempo, [ @{$curlocz[0]}];
+		foreach my $x (0..$#curlocz) {
+			my $inflag=0;
+			foreach my $y (0..$#tempo) {
+				if ( (${$curlocz[$x]}[0] == ${$tempo[$y]}[0]) and (${$curlocz[$x]}[1] <= ${$tempo[$y]}[2]) and (${$curlocz[$x]}[2] >= ${$tempo[$y]}[1]) ) {
+					$inflag++;
+					if (${$curlocz[$x]}[1] <= ${$tempo[$y]}[1]) {
+						${$tempo[$y]}[1] = ${$curlocz[$x]}[1];
+					}
+					if (${$curlocz[$x]}[2] >= ${$tempo[$y]}[2]) {
+						${$tempo[$y]}[2] = ${$curlocz[$x]}[2] ;
+					}
+				}
+			}
+			if ($inflag == 0) {
+				push @tempo, [ @{$curlocz[$x]} ];
+			}
+		}
+		$genhash{$sym} = [ @tempo ];
+	}
+}
+
+## Transferring to @genarray;
+my @genarray=();
+# open ZOUT, ">UCSC_hg".$hg."_transcripts_clusters_HGNC_approved_locz.csv" or die $!;
+foreach my $sym (sort(keys(%genhash))) {
+	foreach my $x (0..$#{$genhash{$sym}}) {
+# 		print ZOUT join("\t", $sym, @{${$genhash{$sym}}[$x]})."\n";
+		push @{$genarray[${${$genhash{$sym}}[$x]}[0] - 1]}, [ ($sym, @{${$genhash{$sym}}[$x]}) ];
+	}
+}
+# close ZOUT;
+
+
+## Creating another hash with a concatenation of symbol.chr.start.end as key;
+my %genlochash = ();
+foreach my $k (0..$#genarray) {
+	foreach my $c (0..$#{$genarray[$k]}) {
+		$genlochash{join('', @{${$genarray[$k]}[$c]}[0..3])} = [ @{${$genarray[$k]}[$c]} ];
+	}
+}
+
+
+print "\tsorting data ...\n";
+foreach my $g (0..$#genarray) {
+	@{$genarray[$g]} = sort { ${$a}[2] <=> ${$b}[2] } @{$genarray[$g]};
+}
+
+
+
+###########################
+### GENEBLOCK CLUSTER : END
+###########################
+
+
+
+
+
+
+
+
+
+
+## On importe les g�nes du cancer...
+my $cancgenfile = '/mnt/proj/chromcancer/Collab/genes_gc.txt';
+print "Importing Atlas cancer annotations ...\n";
+my %cancgenhash=();
+my %oncogenhash=();
+my %tsupgenhash=();
+my %censushash=();
+open CANGEN, $cancgenfile or die $!;
+foreach (<CANGEN>) {
+	chomp;
+	my @temp = split /\t/, $_;
+	$cancgenhash{$temp[1]} = $temp[0];
+	if ($temp[56] eq '=') {
+		$oncogenhash{$temp[1]} = $temp[0];
+	}
+	if ($temp[57] eq '=') {
+		$tsupgenhash{$temp[1]} = $temp[0];
+	}
+	if ($temp[64] eq '=') {
+		$censushash{$temp[1]} = $temp[0];
+	}
+}
+close CANGEN;
+
+
+## On importe les donn�es de tox CTD...
+my $ctdfile = '/mnt/db/ctd/CTD_chem_gene_ixns.tsv';
+print "Importing CTD toxicology genes annotations ...\n";
+my %toxgenhash=();
+my %toxchemhash=();
+open CTDGEN, $ctdfile or die $!;
+foreach (<CTDGEN>) {
+	chomp;
+	if ($_ !~ /^ChemicalName/) {
+		my @temp = split /\t/, $_;
+		if ($temp[6] == 9606) {
+			if (!exists $toxgenhash{$temp[3]}) {
+				$toxgenhash{$temp[3]} = [ @temp[4,2] ];
+			}
+			else {
+				push @{$toxgenhash{$temp[3]}}, $temp[2];
+			}
+			push @{$toxchemhash{lc($temp[0])}}, $temp[3];
+		}
+	}
+}
+close CTDGEN;
+
+
+## Petit filtrage du hash CTD pour �liminer la redondance de mol�cules chimiques issues de publi diff�rentes...
+print "\tfiltering data ...\n";
+foreach my $k (keys(%toxgenhash)) {
+	my %chemunik=();
+	foreach my $c (1..$#{$toxgenhash{$k}}) {
+		$chemunik{${$toxgenhash{$k}}[$c]}++;
+	}
+	$toxgenhash{$k} = [ ${$toxgenhash{$k}}[0], scalar(keys(%chemunik)) ];		## CTDid, Nb_CHEM;
+}
+
+## Filtrage aussi du hash des mol�cules car le m�me g�nes peut y appara�tre plusieurs fois;
+foreach my $m (keys(%toxchemhash)) {
+	my %genunik=();
+	foreach my $gk (@{$toxchemhash{$m}}) {
+		$genunik{$gk}++;
+	}
+	$toxchemhash{$m} = [ sort(keys(%genunik)) ];
+}
+
+if (scalar(keys(%toxgenhash)) == 0) {
+	print "\n\tWARNING : No CTD info banked ! Problem with the source file ?\n\n";
+	$ctdctrl = '<B><I>E!</I></B>';
+}
+
+
+## On importe les pathways de la CTD...
+my $ctdpathfile = '/mnt/db/ctd/CTD_gene_pathways.tsv';
+print "Importing CTD toxicology pathways annotations ...\n";
+my %toxpathash=();
+open CTDPATH, $ctdpathfile or die $!;
+foreach (<CTDPATH>) {
+	chomp;
+	if ($_ !~ /^GeneSymbol/) {
+		my @temp = split /\t/, $_;
+		push @{$toxpathash{$temp[0]}}, $temp[2];
+	}
+}
+close CTDPATH;
+
+## Cr�ation du hash %FULLutphash;
+my %FULLutphash=();
+foreach my $k (keys(%toxpathash)) {
+	foreach my $l ( @{$toxpathash{$k}}) {
+		$FULLutphash{$l}++;
+	}
+}
+
+
+## On importe les g�nes de fusion de TICdb...
+# my $ticfile = '/mnt/proj/annot/TICdb_may2008/FusionGenes_Uniq_TICdb_may2008.txt';
+my $ticfile = '/mnt/db/ticdb/TICdbTable_v2.3.txt';
+print "Importing TICdb fusion genes list ...\n";
+my %fusgenhash=();
+open TICGEN, $ticfile or die $!;
+foreach (<TICGEN>) {
+	chomp;
+	if ($_ !~  /^fusion/i) {
+		my @temp = split /\t/, $_;
+		$fusgenhash{$temp[1]}++;
+		$fusgenhash{$temp[4]}++;
+	}
+	
+}
+close TICGEN;
+
+if (scalar(keys(%fusgenhash)) == 0) {
+	print "\n\tWARNING : No TICdb info banked ! Problem with the source file ?\n\n";
+	$fusctrl = '<B><I>E!</I></B>';
+}
+
+
+## On importe les donn�es CNV de la DGV...
+my %DGVfilehash = ( 17 => '/mnt/db/variant/variant_hg17.txt', 18 => '/mnt/db/variant/variant_hg18.txt', 19 => '/mnt/db/variant/variant_hg19.txt');
+print "Importing DGV annotations ...\n";
+my @cnvarray=();
+open CNV, $DGVfilehash{$hg} or die $!;
+foreach (<CNV>) {
+	chomp;
+	if ($_ !~ /^VariationID/) {
+		my @temp = split /\t/, $_;
+		my $chrA = $temp[2];
+		$chrA =~ s/chr//;
+		my $chrN = $chrA;
+		$chrN =~ s/X/23/;
+		$chrN =~ s/Y/24/;
+		$temp[0] =~ s/^Variation\_//;
+		push @{$cnvarray[$chrN-1]}, [ $temp[0], $chrA, @temp[3,4,5] ];		## VariationID, chrA, Start, End, type;
+	}
+}
+close CNV;
+
+print "\tsorting data ...\n";
+foreach my $c (0..$#cnvarray) {
+	@{$cnvarray[$c]} = sort { ${$a}[1] <=> ${$b}[1] || ${$a}[2] <=> ${$b}[2] } @{$cnvarray[$c]};
+}
+
+if (scalar(@cnvarray) == 0) {
+	print "\n\tWARNING : No DGV info banked ! Problem with the source file ?\n\n";
+	$cnvctrl = '<B><I>E!</I></B>';
+}
+
+
+# On importe les donn�es miRNA...
+my %MIRfilehash = ( 17 => '/mnt/db/mirna/mirnahg17.txt', 18 => '/mnt/db/mirna/mirnahg18.txt', 19 => '/mnt/db/mirna/mirnahg19.txt' );
+print "Importing miRNA data ...\n";
+my @mirarray=();
+open MIR, $MIRfilehash{$hg} or die $!;
+foreach (<MIR>) {
+	chomp;
+	my @temp = split /\t/, $_;
+	my $chrA = $temp[0];
+	$chrA =~ s/chr//;
+	my $chrN = $chrA;
+	$chrN =~ s/X/23/;
+	$chrN =~ s/Y/24/;
+	push @{$mirarray[$chrN-1]}, [ $chrA, @temp[1..3] ];		# chrA, start, end, miRname;
+}
+close MIR;
+
+print "\tsorting data ...\n";
+foreach my $c (0..$#mirarray) {
+	@{$mirarray[$c]} = sort { ${$a}[1] <=> ${$b}[1] || ${$a}[2] <=> ${$b}[2] } @{$mirarray[$c]};
+}
+
+if (scalar(@mirarray) == 0) {
+	print "\n\tWARNING : No MIRdb info banked ! Problem with the source file ?\n\n";
+	$mirctrl = '<B><I>E!</I></B>';
+}
+
+
+# IMPORTATION TABLE CPGISLANDEXT (source UCSC) POUR LE BON BUILD HG
+my %CPGfilehash = ( 17 => '/mnt/proj/cgh/hg17/cpgIslandExt.hg17', 18 => '/mnt/proj/cgh/hg18/cpgIslandExt.hg18', 19 => '/mnt/proj/cgh/hg19/cpgIslandExt.hg19' );
+print "Importing CpGislands data ...\n";
+my @cpgarray = ();
+open CPG, $CPGfilehash{$hg} or die $!;
+foreach (<CPG>) {
+	if ($_ !~ /^\#/) {
+		chomp;
+		my @temp = split /\t/, $_;
+		if ($hg < 19) { unshift(@temp, 'NA'); }
+		if ($temp[1] =~ /^chr([0-9]+|X|Y)$/) {
+			my $chr = $chrom2chr{$temp[1]};
+			push @{$cpgarray[$chr-1]}, [ @temp[0..$#temp] ];
+		}
+	}
+}
+close CPG;
+
+
+
+
+## ET C'EST PARTI !!
+foreach my $co (0..$#filez) {
+	
+	my $infile = $filez[$co];
+	chomp $infile;
+	
+	my $pop0='';
+	my $pop1='';
+	
+	my %untoxpathash=();
+	my %abgene=();
+	
+	## Gestion des noms d'échantillon pour le mode -comp
+	my $s1n='';
+	my $s2n='';
+	
+	## On ouvre le fichier d'entr�e;
+	print "\nReading input file ".$infile."...\n";
+	my @regions=();
+	my @header=();
+	open INFILE, $infile or die $!;
+	foreach (<INFILE>) {
+		chomp;
+		my @temp = split /\t/, $_;
+		if ($_ !~ /^\#/) {
+			my ($chrA, $startend) = split /\:/, $temp[0];
+			my ($start, $end) = split /\-/, $startend;
+			$chrA =~ s/chr//;
+			my $chrN = $chrA;
+			$chrN =~ s/X/23/;
+			$chrN =~ s/Y/24/;
+			$start =~ s/^0+//;
+			$end =~ s/^0+//;
+			
+			if ($mode eq 'cc') {
+# 				push @regions, [ $chrA, $chrN, $start, $end, @temp[5..14] ];
+				push @regions, [ $chrA, $chrN, $start, $end, @temp[4..$#temp] ];
+			}
+			elsif ($mode eq 'mcr') {
+				push @regions, [ $chrA, $chrN, $start, $end, @temp[6, 8..10] ];
+			}
+			elsif ($mode eq 'solo') {
+				push @regions, [ $chrA, $chrN, $start, $end, @temp[1..5] ];
+			}
+			elsif ($mode eq 'comp') {
+				push @regions, [ $chrA, $chrN, $start, $end, @temp[5,6] ];
+			}
+			elsif ($mode eq 'norm') {
+				push @regions, [ $chrA, $chrN, $start, $end ];
+			}
+		}
+		## Mode -cc : rétention du header pour y dénicher plus tard les nom des classes;
+		elsif ( ($mode eq 'cc') and ($_ =~ /^\#Loc/) ) {
+			@header = @temp;
+		}
+		## Mode -comp : récupération des noms d'échantillon
+		elsif ( ($mode eq 'comp') and ($_ =~ /^\#Loc/) ) {
+			my @t1 = split /Log2ratio\./, $temp[5];
+			$s1n = $t1[$#t1];
+			my @t2 = split /Log2ratio\./, $temp[6];
+			$s2n = $t2[$#t2];
+		}
+	}
+	close INFILE;
+	
+# 	print "\n".join("\t", @{$regions[0]})."\n";
+# 	exit;
+	
+	my $suffix='';
+	
+	
+	
+	
+	## Nouvelle option de tri selon la P-value BRUTE et non la localisation. Valable uniquement pour le mode 'cc' !
+	if ($fsort eq 'rawp') {
+		print "Sorting input regions according to their raw P-value...\n";
+		if ($mode eq 'cc') {
+			@regions = sort { ${$a}[-2] <=> ${$b}[-2] || ${$a}[1] <=> ${$b}[1] || ${$a}[2] <=> ${$b}[2] } @regions;
+			$suffix = '_rawPsort';
+		}
+	}
+	
+	## Nouvelle option de tri selon la P-value AJUSTEE et non la localisation. Valable uniquement pour le mode 'cc' !
+	if ($fsort eq 'adjp') {
+		print "Sorting input regions according to their adjusted P-value...\n";
+		if ($mode eq 'cc') {
+			@regions = sort { ${$a}[-1] <=> ${$b}[-1] || ${$a}[1] <=> ${$b}[1] || ${$a}[2] <=> ${$b}[2] } @regions;
+			$suffix = '_adjPsort';
+		}
+	}
+	
+	## Nouvelle option de tri selon la fr�quence et non la localisation. Valable uniquement pour le mode 'mcr' !
+	if ($fsort eq 'freq') {
+		print "Sorting input regions according to their frequency...\n";
+		if ($mode eq 'mcr') {
+			@regions = sort { ${$b}[9] <=> ${$a}[9] || ${$a}[1] <=> ${$b}[1] || ${$a}[2] <=> ${$b}[2] } @regions;
+			$suffix = '_freqsort';
+		}
+	}
+	## Nouvelle option de s�lection sur le log2ratio (absolu). Valable uniquement pour le mode 'solo';
+	if ( ($mode eq 'solo') and ($l2m > 0) ) {
+		$suffix = '_l2m'.$l2m;
+		@regions = sort { ${$b}[6] <=> ${$a}[6] } @regions;
+		my $k=0;
+		while($k <= $#regions) {
+			if (abs(${$regions[$k]}[6])  < $l2m ) {
+				splice @regions, $k, 1;
+			}
+			else {
+				$k++;
+			}
+		}
+	}
+	
+	print "Processing data ...\n";
+	
+	
+	
+	
+	## CORE
+	
+	mkdir('html_'.$time.'_'.$co);
+# 	mkdir('html_'.$time.'_'.$co.'/genes');
+# 	mkdir('html_'.$time.'_'.$co.'/cnv');
+# 	mkdir('html_'.$time.'_'.$co.'/mir');
+	
+	
+	my $outfile = $infile.$suffix.'.html';
+	
+# 	open INDEX1, '>'.$outfile or die $!;
+# 	print INDEX1 '<HTML>
+# <HEAD>
+#  <TITLE>'.$infile.' ('.$time.') - Annotated regions</TITLE>
+# </HEAD>
+# <FRAMESET ROWS="9%,91%" FRAMEBORDER=NO>
+# <FRAME SRC="html_'.$time.'_'.$co.'/iheader.html" NAME="Header1" SCROLLING=NO>
+# <FRAME SRC="html_'.$time.'_'.$co.'/itable.html" NAME="Regionlist" SCROLLING=YES>
+# </FRAMESET>
+# </HTML>
+# ';
+# 	close INDEX1;
+	
+	open INDEX1, '>'.$outfile or die $!;
+	print INDEX1 '<HTML>
+<HEAD>
+ <TITLE>'.$infile.' ('.$time.') - Annotated regions</TITLE>
+</HEAD>
+<BODY BGCOLOR=#EEEEFF>
+<FONT SIZE=5 COLOR=black><CENTER><B><I>'.$infile.'</I></B></CENTER></FONT>
+<TABLE BORDER=2 WIDTH=100% ALIGN=center>
+ <TR ALIGN=center BGCOLOR=orange>';
+#    <B><TH WIDTH=10% ROWSPAN=2>Loc</TH> <TH WIDTH=7% ROWSPAN=2>Width</TH> <TH WIDTH=5% ROWSPAN=2>Band1</TH> <TH WIDTH=5% ROWSPAN=2>Band2</TH> ';
+	
+	if ($mode eq 'cc') {
+		print INDEX1 '
+  <B><TH WIDTH=10% ROWSPAN=2>Loc</TH> <TH WIDTH=5% ROWSPAN=2>Width</TH> <TH WIDTH=5% ROWSPAN=2>Band1</TH> <TH WIDTH=5% ROWSPAN=2>Band2</TH> ';
+		my @cheads=();
+		for (my $h=4; $h < $#header-3; $h=$h+3) {
+			my $classh = $header[$h];
+			$classh =~ s/\.Status$//;
+			push @cheads, $classh;
+			print INDEX1 '<TH COLSPAN=3>'.$classh.'</TH> ';
+		}
+		print INDEX1 '<TH WIDTH=5% ROWSPAN=2>Score</TH> <TH WIDTH=5% ROWSPAN=2>RawP</TH> <TH WIDTH=5% ROWSPAN=2>AdjP</TH> <TH WIDTH=5% ROWSPAN=2>Genes</TH> <TH WIDTH=5% ROWSPAN=2>CNV</TH> <TH WIDTH=5% ROWSPAN=2>miRNA</TH> <TH WIDTH=5% ROWSPAN=2>CpGIsl</TH></B>
+ </TR>
+ <TR ALIGN=center BGCOLOR=orange>
+  <B>';
+		foreach my $ch (0..$#cheads) {
+			print INDEX1 '<TH WIDTH=3%>Status</TH> <TH WIDTH=3%>Gain</TH> <TH WIDTH=3%>Loss</TH>';
+		}
+		print INDEX1 '</B>
+ </TR>
+';
+	}
+	elsif ($mode eq 'mcr') {
+		print INDEX1 '
+  <B><TH WIDTH=10%>Loc</TH> <TH WIDTH=7%>Width</TH> <TH WIDTH=5%>Band1</TH> <TH WIDTH=5%>Band2</TH> <TH WIDTH=5%>Probes</TH> <TH WIDTH=3%>MCR type</TH> <TH WIDTH=3%>Freq</TH> <TH WIDTH=4%>Conf</TH> <TH WIDTH=5%>Genes</TH> <TH WIDTH=5%>CNV</TH> <TH WIDTH=5%>miRNA</TH> <TH WIDTH=5%>CpGIsl</TH></B>
+ </TR>';
+	}
+	elsif ($mode eq 'solo') {
+		print INDEX1 '
+  <B><TH WIDTH=10%>Loc</TH> <TH WIDTH=5%>Width</TH> <TH WIDTH=5%>Band1</TH> <TH WIDTH=5%>Band2</TH> <TH WIDTH=5%>Probes</TH> <TH WIDTH=6%>Status</TH> <TH WIDTH=8%>Log2(ratio)</TH> <TH WIDTH=8%>Ratio</TH> <TH WIDTH=8%>Genes</TH> <TH WIDTH=5%>CNV</TH> <TH WIDTH=5%>miRNA</TH> <TH WIDTH=5%>CpGIsl</TH></B>
+ </TR>';
+	}
+	elsif ($mode eq 'comp') {
+		print INDEX1 '
+  <B><TH WIDTH=10% ROWSPAN=2>Loc</TH> <TH WIDTH=5% ROWSPAN=2>Width</TH> <TH WIDTH=5% ROWSPAN=2>Band1</TH> <TH WIDTH=5% ROWSPAN=2>Band2</TH> <TH COLSPAN=2>'.$s1n.'</TH> <TH COLSPAN=2>'.$s2n.'</TH>  <TH ROWSPAN=2 WIDTH=8%>Genes</TH> <TH ROWSPAN=2 WIDTH=5%>CNV</TH> <TH ROWSPAN=2 WIDTH=5%>miRNA</TH> <TH ROWSPAN=2 WIDTH=5%>CpGIsl</TH></B>
+ </TR>
+ <TR ALIGN=center BGCOLOR=orange>
+  <B><TH WIDTH=5%>Status</TH> <TH WIDTH=5%>Log2(ratio)</TH> <TH WIDTH=5%>Status</TH> <TH WIDTH=5%>Log2(ratio)</TH> </B>
+ </TR>';
+	}
+	else {
+		print INDEX1 '
+  <B><TH WIDTH=10%>Loc</TH> <TH WIDTH=7%>Width</TH> <TH WIDTH=5%>Band1</TH> <TH WIDTH=5%>Band2</TH> <TH WIDTH=5%>Genes</TH> <TH WIDTH=5%>CNV</TH> <TH WIDTH=5%>miRNA</TH> <TH WIDTH=5%>CpGIsl</TH></B>
+ </TR>';
+	}
+	
+	
+	open GENH, ">html_".$time.'_'.$co."/genes.html" or die $!;
+	print GENH '<HTML>
+<HEAD>
+ <TITLE>List of annotated genes</TITLE>
+</HEAD>
+<BODY BGCOLOR=#EEEEFF>
+';
+	
+	
+	open CNVH, ">html_".$time.'_'.$co."/cnv.html" or die $!;
+	print CNVH '<HTML>
+<HEAD>
+ <TITLE>List of annotated Copy Number Variations (from the DGV)</TITLE>
+</HEAD>
+<BODY BGCOLOR=#EEEEFF>
+';
+	
+	
+	open MIRH, ">html_".$time.'_'.$co."/mir.html" or die $!;
+	print MIRH '<HTML>
+<HEAD>
+ <TITLE>List of annotated miRNA</TITLE>
+</HEAD>
+<BODY BGCOLOR=#EEEEFF>
+';
+	
+	
+	open CPGH, ">html_".$time.'_'.$co."/cpg.html" or die $!;
+	print CPGH '<HTML>
+<HEAD>
+ <TITLE>List of annotated CpG Islands</TITLE>
+</HEAD>
+<BODY BGCOLOR=#EEEEFF>
+';
+
+# 	open BACKFOOT, ">html_".$time.'_'.$co."/back.html" or die $!;
+# 	print BACKFOOT '<HTML>
+# <BODY BGCOLOR=#EEEEFF>
+# <B><A HREF=../'.$outfile.' TARGET=_parent> <<- Back</B>
+# </BODY>
+# </HTML>
+# ';
+# 	close BACKFOOT;
+	
+	if (@regions == 0) {
+		print INDEX1 '<BR>
+<FONT SIZE=6 COLOR=red><CENTER><B>NO REGION TO ANNOTATE !</I></B></CENTER></FONT><BR>';
+	}
+	
+	foreach my $r (0..$#regions) {
+		
+		my ($oncoc, $tsupc, $cenc, $multic, $atlasc) = (0, 0, 0, 0, 0);
+		
+		my @curreg = @{$regions[$r]};
+		
+		my $anchor = 'chr'.join('_', @curreg[0,2,3]);
+		
+# 		if (@genlist > 0) {
+# 			print GENH '<A NAME="'.$anchor.'"> </A>
+# <FONT SIZE=4 COLOR=black><I>Genomic region spanning</I> <B>chr'.$curreg[0].'</B> <I>from</I> <B>'.&triplet($curreg[2]).'</B> <I>to</I> <B>'.&triplet($curreg[3]).'</B> <I>bp.</I></FONT>
+# <TABLE BORDER=2 WIDTH=100% ALIGN=center>
+#  <TR ALIGN=center BGCOLOR=lightblue>
+#   <B><TH WIDTH=10%>Gene</TH> <TH WIDTH=5%>Chr</TH> <TH WIDTH=8%>Start</TH> <TH WIDTH=8%>End</TH> <TH WIDTH=6%>Width</TH> <TH width=24%>Pathways (CTD)</TH> <TH width=24%>Description</TH> <TH WIDTH=5%>CTD</TH> <TH WIDTH=5%>Fusion</TH> <TH WIDTH=5%>CNV</TH></B>
+#  </TR>';
+# 		
+# 			if ($mode =~ /^(solo|mcr)$/) {
+# 				print GENH '
+# <TR ALIGN=right BGCOLOR='.$bgcoltype{$curreg[5]}.'>';
+# 			}
+# 			else {
+# 				print GENH '
+# <TR ALIGN=right>';
+# 			}
+# 		}
+	
+		my $realwidth = $curreg[3] - $curreg[2] + 1;
+		my $width = sprintf("%.2f", ($realwidth/1000000));
+		my $widthunit = 'Mb';
+		if ($realwidth < 1000) {
+			$width = $realwidth;
+			$widthunit = 'b';
+		}
+		elsif ($realwidth <1000000) {
+			$width = sprintf("%.2f", ($realwidth/1000));
+			$widthunit = 'Kb';
+		}
+			
+		
+		print INDEX1 '
+ <TR ALIGN=right>
+  <TD><A HREF=http://genome.ucsc.edu/cgi-bin/hgTracks?position=chr'.$curreg[0].':'.$curreg[2].'-'.$curreg[3].'&db=hg'.$hg.' TARGET=_new>'.join(':', @curreg[0,2,3]).'</TD> <TD>'.$width.' '.$widthunit.'</TD>';
+		
+		my $chrI = $curreg[1]-1;
+# 		print $chrI."\n";
+		
+		## Recherche de la bande cyto d'entr�e;
+		my $band1 = 'Undef';
+		foreach my $c (0..$#{$cytoarray[$chrI]}) {
+			if ( ( $curreg[2] >= ${${$cytoarray[$chrI]}[$c]}[1] ) and ( $curreg[2] <= ${${$cytoarray[$chrI]}[$c]}[2] ) ) {
+				$band1 = join('', @{${$cytoarray[$chrI]}[$c]}[0,3]);
+				last;
+			}
+		}
+		if ($band1 eq 'Undef') {
+			print INDEX1 ' <TD>'.$band1.'</TD>';
+		}
+		else {
+			print INDEX1 ' <TD><A HREF=http://genome.ucsc.edu/cgi-bin/hgTracks?position='.$band1.'&pix=960&Submit=Submit&db=hg'.$hg.' TARGET=_new>'.$band1.'</TD>';
+		}
+		
+		
+		## Recherche de la bande cyto de sortie;
+		my $band2 = 'Undef';
+		foreach my $c (0..$#{$cytoarray[$chrI]}) {
+			if ( ( $curreg[3] >= ${${$cytoarray[$chrI]}[$c]}[1] ) and ( $curreg[3] <= ${${$cytoarray[$chrI]}[$c]}[2] ) ) {
+				$band2 = join('', @{${$cytoarray[$chrI]}[$c]}[0,3]);
+				last;
+			}
+		}
+		if ($band2 eq 'Undef') {
+			print INDEX1 ' <TD>'.$band2.'</TD>';
+		}
+		else {
+			print INDEX1 ' <TD><A HREF=http://genome.ucsc.edu/cgi-bin/hgTracks?position='.$band2.'&pix=960&Submit=Submit&db=hg'.$hg.' TARGET=_new>'.$band2.'</TD>';
+		}
+		
+		
+		## Clause spéciale : mode CC !
+		if ($mode eq 'cc') {
+			
+			for (my $cr=4; $cr < $#curreg-3; $cr=$cr+3) {
+				print INDEX1 '<TD ALIGN=center BGCOLOR='.$coltype{$curreg[$cr]}.'>'.$curreg[$cr].'</TD> <TD>'.sprintf("%u", $curreg[$cr+1]*100).'%</TD> <TD>'.sprintf("%u", $curreg[$cr+2]*100).'%</TD> ';
+			}
+			print INDEX1 '<TD WIDTH=5%>'.sprintf("%.2f", $curreg[-3]).'</TD> ';
+			print INDEX1 '<TD WIDTH=5%>'.sprintf("%.2E", $curreg[-2]).'</TD> ';
+			print INDEX1 '<TD WIDTH=5%>'.sprintf("%.2E", $curreg[-1]).'</TD> ';
+			
+# 			print THT '<TD WIDTH=5%>'.$curreg[4].'</TD> <TD WIDTH=3% ALIGN=center BGCOLOR='.$coltype{$curreg[5]}.'>'.$curreg[5].'</TD> <TD WIDTH=3%>'.($curreg[6]*100).'%</TD> <TD WIDTH=3%>'.($curreg[7]*100).'%</TD>  <TD WIDTH=3% ALIGN=center BGCOLOR='.$coltype{$curreg[8]}.'>'.$curreg[8].'</TD> <TD WIDTH=3%>'.($curreg[9]*100).'%</TD> <TD WIDTH=3%>'.($curreg[10]*100).'%</TD> ';
+# 			foreach my $z (11..13) {
+# 				print THT '<TD WIDTH=5%>'.$curreg[$z].'</TD> ';
+# 			}
+		}
+		## 2e clause spéciale : mode MCR !
+		elsif ($mode eq 'mcr') {
+			print INDEX1 '<TD>'.$curreg[4].'</TD> <TD ALIGN=center BGCOLOR='.$coltype{$curreg[5]}.'>'.$curreg[5].'</TD> <TD>'.sprintf("%.1f",$curreg[6]*100).'%</TD> <TD>'.$curreg[7].'</TD> ';
+# 			print HEADER1 '<TH WIDTH=5%>Probes</TH> <TH WIDTH=3%>MCR type</TH> <TH WIDTH=3%>Avg freq</TH> <TH WIDTH=4%>Pval</TH> ';
+		}
+		## 3e clause spéciale : mode SOLO !
+		if ($mode eq 'solo') {
+			print INDEX1 '<TD>'.$curreg[4].'</TD> <TD ALIGN=center BGCOLOR='.$coltype{$curreg[5]}.'>'.$curreg[5].'</TD>';
+			if ($curreg[6] >= $gcol) {
+				print INDEX1 ' <TD><B><FONT COLOR=green>'.sprintf("%.2f", $curreg[6]).'</FONT></B></TD>';
+			}
+			elsif ($curreg[6] <= $lcol) {
+				print INDEX1 ' <TD><B><FONT COLOR=red>'.sprintf("%.2f", $curreg[6]).'</FONT></B></TD>';
+			}
+			elsif (abs($curreg[6]) >= $bold) {
+				print INDEX1 ' <TD><B>'.sprintf("%.2f", $curreg[6]).'</B></TD>';
+			}
+			else {
+				print INDEX1 ' <TD>'.sprintf("%.2f", $curreg[6]).'</TD>';
+			}
+# 			print INDEX1 ' <TD WIDTH=8%>'.sprintf("%.2f", $curreg[7]).'</TD> <TD WIDTH=13%>'.$curreg[8].'</TD> ';
+			print INDEX1 ' <TD>'.sprintf("%.2f", $curreg[7]).'</TD> ';
+		}
+		## 3e clause spéciale : mode COMP !
+		if ($mode eq 'comp') {
+			## Sample1
+			print INDEX1 '<TD ALIGN=center BGCOLOR='.$coltype{gltype($curreg[4])}.'>'.gltype($curreg[4]).'</TD>';
+			if ($curreg[4] >= $gcol) {
+				print INDEX1 ' <TD><B><FONT COLOR=green>'.sprintf("%.2f", $curreg[4]).'</FONT></B></TD>';
+			}
+			elsif ($curreg[4] <= $lcol) {
+				print INDEX1 ' <TD><B><FONT COLOR=red>'.sprintf("%.2f", $curreg[4]).'</FONT></B></TD>';
+			}
+			elsif (abs($curreg[4]) >= $bold) {
+				print INDEX1 ' <TD><B>'.sprintf("%.2f", $curreg[4]).'</B></TD>';
+			}
+			else {
+				print INDEX1 ' <TD>'.sprintf("%.2f", $curreg[4]).'</TD>';
+			}
+			## Sample2
+			print INDEX1 '<TD ALIGN=center BGCOLOR='.$coltype{gltype($curreg[5])}.'>'.gltype($curreg[5]).'</TD>';
+			if ($curreg[5] >= $gcol) {
+				print INDEX1 ' <TD><B><FONT COLOR=green>'.sprintf("%.2f", $curreg[5]).'</FONT></B></TD>';
+			}
+			elsif ($curreg[5] <= $lcol) {
+				print INDEX1 ' <TD><B><FONT COLOR=red>'.sprintf("%.2f", $curreg[5]).'</FONT></B></TD>';
+			}
+			elsif (abs($curreg[5]) >= $bold) {
+				print INDEX1 ' <TD><B>'.sprintf("%.2f", $curreg[5]).'</B></TD>';
+			}
+			else {
+				print INDEX1 ' <TD>'.sprintf("%.2f", $curreg[5]).'</TD>';
+			}
+		}
+		
+		## Recherche des gènes inclus dans la région;
+		my @genlist=();
+		foreach my $c (0..$#{$genarray[$chrI]}) {
+			## Cas g�ne inclus complet;
+			if ( ( ${${$genarray[$chrI]}[$c]}[2] >= ${$regions[$r]}[2] ) and ( ${${$genarray[$chrI]}[$c]}[3] <= ${$regions[$r]}[3] ) ) {
+# 				push @genlist, [ ${${$genarray[$chrI]}[$c]}[0], 'full' ];
+				push @genlist, [ (@{${$genarray[$chrI]}[$c]}, 'full') ];
+				push @{$abgene{${${$genarray[$chrI]}[$c]}[0]}}, $curreg[6];
+			}
+			## Cas g�ne d�bordant � gauche;
+			elsif ( ( ${${$genarray[$chrI]}[$c]}[3] >= ${$regions[$r]}[2] ) and ( ${${$genarray[$chrI]}[$c]}[2] < ${$regions[$r]}[2] ) ) {
+# 				push @genlist, [ ${${$genarray[$chrI]}[$c]}[0], 'part' ];
+				push @genlist, [ (@{${$genarray[$chrI]}[$c]}, 'part') ];
+				push @{$abgene{${${$genarray[$chrI]}[$c]}[0]}}, $curreg[6];
+			}
+			## Cas g�ne d�bordant � droite;
+			elsif ( ( ${${$genarray[$chrI]}[$c]}[2] <= ${$regions[$r]}[3] ) and ( ${${$genarray[$chrI]}[$c]}[3] > ${$regions[$r]}[3] ) ) {
+# 				push @genlist, [ ${${$genarray[$chrI]}[$c]}[0], 'part' ];
+				push @genlist, [ (@{${$genarray[$chrI]}[$c]}, 'part') ];
+				push @{$abgene{${${$genarray[$chrI]}[$c]}[0]}}, $curreg[6];
+			}
+		}
+# 		if (@genlist > 0) {
+# 			print THT ' <TD WIDTH=5%><A HREF=genes/f'.$anchor.' TARGET=_parent>'.@genlist.'</TD>';
+# 		}
+# 		else {
+# 			print THT ' <TD>-</TD>';
+# 		}
+
+		
+		if (@genlist > 0) {
+			print GENH '<A NAME="'.$anchor.'"> </A>
+<FONT SIZE=4 COLOR=black><I>Genomic region spanning</I> <B>chr'.$curreg[0].'</B> <I>from</I> <B>'.&triplet($curreg[2]).'</B> <I>to</I> <B>'.&triplet($curreg[3]).'</B> <I>bp.</I></FONT>
+<TABLE BORDER=2 WIDTH=100% ALIGN=center>
+ <TR ALIGN=center BGCOLOR=lightblue>
+  <B><TH WIDTH=10%>Gene</TH> <TH WIDTH=5%>Chr</TH> <TH WIDTH=8%>Start</TH> <TH WIDTH=8%>End</TH> <TH WIDTH=6%>Width</TH> <TH width=24%>Pathways (CTD)</TH> <TH width=24%>Description</TH> <TH WIDTH=5%>CTD</TH> <TH WIDTH=5%>Fusion</TH> <TH WIDTH=5%>CNV</TH></B>
+ </TR>';
+		
+# 			if ($mode =~ /^(solo|mcr)$/) {
+# 				print GENH '
+# <TR ALIGN=right BGCOLOR='.$bgcoltype{$curreg[5]}.'>';
+# 			}
+# 			else {
+# 				print GENH '
+# <TR ALIGN=right>';
+# 			}
+		}
+		
+		foreach my $g (0..$#genlist) {
+			
+			my $gsymbol = ${$genlist[$g]}[0];
+			my @ginfo = @{$genlochash{join('', @{$genlist[$g]}[0..3])}};
+			my $link = 'http://genome.ucsc.edu/cgi-bin/hgTracks?position='.$gsymbol.'&pix=960&Submit=Submit&db=hg'.$hg;
+			
+			## SI ONCO;
+			if (exists $oncogenhash{$gsymbol}) {
+				## ET SI AUSSI TSUP;
+				if (exists $tsupgenhash{$gsymbol}) {
+					$multic++;
+					print GENH '
+ <TR ALIGN=right BGCOLORC0C0C0>
+  <TD WIDTH=10%><B>';
+					## L� on a un g�ne qui est simultan�ment connu comme onco ET tsup !
+				}
+				## SINON SI JUSTE ONCO;
+				else {
+					$oncoc++;
+					print GENH '
+ <TR ALIGN=right BGCOLOR=#FF6347>
+  <TD WIDTH=10%><B>';
+				}
+				$link = 'http://atlasgeneticsoncology.org/Genes/GC_'.$gsymbol.'.html';
+			}
+			## SINON SI JUSTE TSUP;
+			elsif (exists $tsupgenhash{$gsymbol}) {
+				$tsupc++;
+				print GENH '
+ <TR ALIGN=right BGCOLOR=#90EE90>
+  <TD WIDTH=10%><B>';
+				$link = 'http://atlasgeneticsoncology.org/Genes/GC_'.$gsymbol.'.html';
+			}
+			## SI NI ONCO, NI TSUP, MAIS PRESENT DANS LE CENSUS;
+			elsif (exists $censushash{$gsymbol}) {
+				$cenc++;
+				print GENH '
+ <TR ALIGN=right BGCOLOR=#00FFFF>
+  <TD WIDTH=10%><B>';
+# 				$link = 'http://atlasgeneticsoncology.org/Genes/GC_'.$gsymbol.'.html';
+				$link = 'http://www.ncbi.nlm.nih.gov/sites/entrez?db=gene&cmd=Retrieve&dopt=Graphics&list_uids='.$censushash{$gsymbol};
+			}
+			## SINON SI NI ONCO, NI TSUP, MAIS JUSTE PRESENT DANS L'ATLAS;
+			else {
+				if ($mode =~ /^(solo|mcr)$/) {
+					print GENH '
+ <TR ALIGN=right BGCOLOR='.$bgcoltype{$curreg[5]}.'>';
+				}
+				else {
+					print GENH '
+ <TR ALIGN=right>';
+				}
+				
+				if (exists $cancgenhash{$gsymbol}) {
+					$atlasc++;
+					print GENH '
+  <TD WIDTH=10%><B>';
+					$link = 'http://atlasgeneticsoncology.org/Genes/GC_'.$gsymbol.'.html';
+				}
+				## SINON GENE BANAL;
+				else {
+					print GENH '
+  <TD WIDTH=10%>';
+				}
+			}
+			## SI GENE TRONQUE PAR L'ABERRATION -> ITALIQUE;
+			if (${$genlist[$g]}[$#{$genlist[$g]}] eq 'part') {
+				print GENH '<I>';
+				## ET SI GENE DE FUSION -> BLINK
+				if (exists $fusgenhash{$gsymbol}) {
+					print GENH '<BLINK>';
+				}
+			}
+			
+			
+			print GENH '<A HREF='.$link.' TARGET=_new>'.$gsymbol;
+			
+			## SI GENE TRONQUE, ON FERME L'ITALIQUE;
+			if (${$genlist[$g]}[$#{$genlist[$g]}] eq 'part') {
+				## ET SI GENE DE FUSION -> BLINK
+				if (exists $fusgenhash{$gsymbol}) {
+					print GENH '</BLINK>';
+				}
+				print GENH '</I>';
+			}
+			## SI GENE PRESENT DANS L'ATLAS (ONCO, TSUP OU NON), ON FERME LE BOLD;
+			if (exists $cancgenhash{$gsymbol}) {
+				print GN '</B>';
+			}
+			
+			my $grealwidth = $ginfo[3] - $ginfo[2] + 1;
+			my $gwidth = sprintf("%.2f", ($grealwidth/1000000));
+			my $gwidthunit = 'Mb';
+			if ($grealwidth < 1000) {
+				$gwidth = $grealwidth;
+				$gwidthunit = 'b';
+			}
+			elsif ($grealwidth <1000000) {
+				$gwidth = sprintf("%.2f", ($grealwidth/1000));
+				$gwidthunit = 'Kb';
+			}
+			
+			print GENH '</TD> <TD ALIGN=center>'.${$regions[$r]}[0].'</TD><TD>'.&triplet($ginfo[2]).'</TD> <TD>'.&triplet($ginfo[3]).'</TD> <TD>'.$gwidth.' '.$gwidthunit.'</TD> <TD ALIGN=left>';
+			
+			## SI PATHWAY CTD EXISTE(NT) POUR CE GENE;
+			if (exists $toxpathash{$gsymbol}) {
+				if ($mode eq 'solo') {
+					my @TP = @{$toxpathash{$gsymbol}};
+					foreach my $tpi (@TP) {
+						push @{$untoxpathash{$tpi}}, [ $gsymbol, $curreg[6] ];
+					}
+						
+						
+# 					push @{$untoxpathash{$toxpathash{$gsymbol}}}, [ $gsymbol, $curreg[6] ];
+				}
+				foreach my $tp (0..$#{$toxpathash{$gsymbol}}) {
+					foreach my $ckw (@cancerkeywords) {
+						if ( (${$toxpathash{$gsymbol}}[$tp] =~ /$ckw/i) and (${$toxpathash{$gsymbol}}[$tp] !~ /like/i) ) {
+							${$toxpathash{$gsymbol}}[$tp] = '<SPAN STYLE="background:#FFFF66">'.${$toxpathash{$gsymbol}}[$tp].'</SPAN>';
+							last;
+						}
+					}
+				}
+				print GENH join('<BR>', @{$toxpathash{$gsymbol}});
+			}
+			else {
+				print GENH $ctdpctrl;
+			}
+			
+			print GENH '<TD><A HREF=http://www.genecards.org/cgi-bin/carddisp.pl?gene='.$gsymbol.' TARGET=_new>';
+			my $descprint='-';
+			foreach my $ckw (@cancerkeywords) {
+				if ($ginfo[4] =~ /$ckw/i) {
+					$descprint = '<SPAN STYLE="background:#FFFF66">'.$ginfo[4].'</SPAN>';
+					last;
+				}
+			}
+			if ($descprint eq '-') {
+				$descprint = $ginfo[4];
+			}
+			print GENH $descprint.'</TD><TD>';
+			
+			## SI GENE INCLUS DANS CTD;
+			if (exists $toxgenhash{$gsymbol}) {
+				print GENH '<A HREF=http://ctd.mdibl.org/detail.go?type=gene&db=GENE&acc='.${$toxgenhash{$gsymbol}}[0].' TARGET=_new>'.${$toxgenhash{$gsymbol}}[1];
+			}
+			else {
+				print GENH $ctdctrl;
+			}
+			print GENH '</TD><TD>';
+			
+			## SI GENE CONNU COMME IMPLIQUE DANS FUSION;
+			if (exists $fusgenhash{$gsymbol}) {
+				print GENH '<A HREF=http://www.unav.es/genetica/TICdb/results.php?hgnc='.$gsymbol.' TARGET=_new><BLINK>YES</BLINK>';
+			}
+			else {
+				print GENH $fusctrl;
+			}
+			print GENH '</TD><TD>';
+			
+			
+			## ON CHERCHE SI LE GENE EST TOUCHE PAR UN OU PLS CNVs;
+			my $cnvc=0;
+			foreach my $n (0..$#{$cnvarray[$chrI]}) {
+				if ( ( ${${$cnvarray[$chrI]}[$n]}[3] >= $ginfo[2] ) and ( ${${$cnvarray[$chrI]}[$n]}[2] <= $ginfo[3] ) ) {
+					$cnvc++;
+				}
+			}
+			if ($cnvc > 0) {
+				my $Dchr = $ginfo[1];
+				$Dchr =~ s/23/X/;
+				$Dchr =~ s/24/Y/;
+				print GENH '<A HREF=http://mnt/projects.tcag.ca/variation/cgi-bin/gbrowse/hg'.$hg.'?name=chr'.$Dchr.':'.$ginfo[2].'..'.$ginfo[3].' TARGET=_new>'.$cnvc;
+# 				print THT2 '<A HREF=http://mnt/projects.tcag.ca/cgi-bin/variation/xview?source=hg'.$hg.'&view=variation&id=Variation_3274
+			}
+			else {
+				print GENH $cnvctrl;
+			}
+			
+			print GENH '</TD>';
+			
+			print GENH '
+ </TR>';
+		}
+		if (@genlist > 0) {
+			print GENH '
+</TABLE>
+<BR><BR>';
+		}
+		
+		if (@genlist > 0) {
+			
+			print INDEX1 ' <TD>';
+			
+			if ($oncoc > 0) {
+				print INDEX1 '<B><FONT SIZE=-1 COLOR=red>'.$oncoc.' </FONT></B>';
+			}
+			if ($tsupc > 0) {
+				print INDEX1 '<B><FONT SIZE=-1 COLOR=green>'.$tsupc.' </FONT></B>';
+			}
+			if ($multic > 0) {
+				print INDEX1 '<B><FONT SIZE=-1 COLOR=grey>'.$multic.' </FONT></B>';
+			}
+			if ($cenc > 0) {
+				print INDEX1 '<B><FONT SIZE=-1 COLOR=blue>'.$cenc.' </FONT></B>';
+			}
+			if ($atlasc > 0) {
+				print INDEX1 '<B><FONT SIZE=-1 COLOR=black>'.$atlasc.' </FONT></B>';
+			}
+			print INDEX1 '<A HREF=html_'.$time.'_'.$co.'/genes.html#'.$anchor.' TARGET=_parent>'.@genlist.'</A></TD>';
+		}
+		else {
+			print INDEX1 ' <TD>-</TD>';
+		}
+		
+		
+		## SECTION RECHERCHE CNV
+
+		my $acnvc=0;
+		my @cnvdata=();
+		foreach my $c (0..$#{$cnvarray[$chrI]}) {
+			if ( ( ${${$cnvarray[$chrI]}[$c]}[3] >= ${$regions[$r]}[2]) and (${${$cnvarray[$chrI]}[$c]}[2] <= ${$regions[$r]}[3]) ) {
+				$acnvc++;
+				push @cnvdata, [ @{${$cnvarray[$chrI]}[$c]} ];
+			}
+		}
+		
+		if ($acnvc > 0) {
+			print INDEX1 '<TD><A HREF=html_'.$time.'_'.$co.'/cnv.html#'.$anchor.' TARGET=_parent>'.$acnvc.'</TD>';
+			
+			print CNVH '<A NAME="'.$anchor.'"> </A>
+<FONT SIZE=4 COLOR=black><I>Genomic region spanning</I> <B>chr'.$curreg[0].'</B> <I>from</I> <B>'.&triplet($curreg[2]).'</B> <I>to</I> <B>'.&triplet($curreg[3]).'</B> <I>bp.</I></FONT>
+<TABLE BORDER=2 WIDTH=100% ALIGN=center>
+ <TR ALIGN=center BGCOLOR=yellow>
+  <B><TH WIDTH=10%>DGV Id</TH> <TH WIDTH=5%>Chr</TH> <TH WIDTH=10%>Start</TH> <TH WIDTH=10%>End</TH> <TH WIDTH=10%>Width</TH> <TH WIDTH=10%>Type</TH></B>
+ </TR>';
+			
+			
+			foreach my $cv (0..$#cnvdata) {
+				
+				if ($mode =~ /^(solo|mcr)$/) {
+					print CNVH '
+ <TR ALIGN=right BGCOLOR='.$bgcoltype{$curreg[5]}.'>';
+				}
+				else {
+					print CNVH '
+ <TR ALIGN=right>';
+				}
+				
+				print CNVH '
+  <TD><A HREF=http://mnt/projects.tcag.ca/cgi-bin/variation/xview?source=hg'.$hg.'&view=variation&id=Variation_'.${$cnvdata[$cv]}[0].' TARGET=_new>'.${$cnvdata[$cv]}[0].'</TD> <TD ALIGN=center>'.${$regions[$r]}[0].'</TD> <TD>'.&triplet(${$cnvdata[$cv]}[2]).'</TD> <TD>'.&triplet(${$cnvdata[$cv]}[3]).'</TD> <TD>'.&triplet(${$cnvdata[$cv]}[3] - ${$cnvdata[$cv]}[2] +1).'</TD> <TD>'.${$cnvdata[$cv]}[4].'</TD>
+ </TR>';
+			}
+			print CNVH '
+</TABLE>
+<BR><BR>';
+		}
+		else {
+			print INDEX1 '<TD>'.$cnvctrl.'</TD>';
+		}
+		
+		
+		
+		## SECTION RECHERCHE MIR
+		
+		my $amirc=0;
+		my @mirdata=();
+		foreach my $c (0..$#{$mirarray[$chrI]}) {
+			if ( ( ${${$mirarray[$chrI]}[$c]}[2] >= ${$regions[$r]}[2]) and (${${$mirarray[$chrI]}[$c]}[1] <= ${$regions[$r]}[3]) ) {
+				$amirc++;
+				my @mirtmp = @{${$mirarray[$chrI]}[$c]};
+				$mirtmp[3] =~ s/hsa-mir-/Hsa-miR-/i;
+				$mirtmp[3] =~ s/-[0-9]$//;
+				push @mirdata, [ @mirtmp ];
+			}
+		}
+		
+		if ($amirc > 0) {
+			print INDEX1 '<TD><A HREF=html_'.$time.'_'.$co.'/mir.html#'.$anchor.' TARGET=_parent>'.$amirc.'</TD>';
+			
+			print MIRH '<A NAME="'.$anchor.'"> </A>
+<FONT SIZE=4 COLOR=black><I>Genomic region spanning</I> <B>chr'.$curreg[0].'</B> <I>from</I> <B>'.&triplet($curreg[2]).'</B> <I>to</I> <B>'.&triplet($curreg[3]).'</B> <I>bp.</I></FONT>
+<TABLE BORDER=2 WIDTH=100% ALIGN=center>
+ <TR ALIGN=center BGCOLOR=#CC0099>
+  <B><TH WIDTH=10%>miR</TH> <TH WIDTH=5%>Chr</TH> <TH WIDTH=10%>Start</TH> <TH WIDTH=10%>End</TH> <TH WIDTH=10%>Width</TH> <TH WIDTH=10%>Target Genes</TH> <TH WIDTH=10%>Target Pathways</TH></B> </TR>
+ </TR>';
+			
+			
+			
+			foreach my $mr (0..$#mirdata) {
+				
+				if ($mode =~ /^(solo|mcr)$/) {
+					print MIRH '
+ <TR ALIGN=right BGCOLOR='.$bgcoltype{$curreg[5]}.'>';
+				}
+				else {
+					print MIRH '
+ <TR ALIGN=right>';
+				}
+			
+				print MIRH '
+  <TD><A HREF=http://microrna.sanger.ac.uk/cgi-bin/sequences/mirna_entry.pl?id='.${$mirdata[$mr]}[3].' TARGET=_new>'.${$mirdata[$mr]}[3].'</TD> <TD ALIGN=center>'.${$regions[$r]}[0].'</TD> <TD>'.&triplet(${$mirdata[$mr]}[1]).'</TD> <TD>'.&triplet(${$mirdata[$mr]}[2]).'</TD> <TD>'.&triplet(${$mirdata[$mr]}[2] - ${$mirdata[$mr]}[1] +1).'</TD> <TD><A HREF=http://mirdb.org/cgi-bin/search.cgi?searchType=miRNA&searchBox='.${$mirdata[$mr]}[3].'&full=1 TARGET=_new><I>TG</I></TD> <TD><A HREF=http://mirdb.org/cgi-bin/pathway.cgi?mirna='.${$mirdata[$mr]}[3].' TARGET=_new><I>TP</I></TD>
+ </TR>';
+			}
+			
+			print MIRH '
+</TABLE>
+<BR><BR>';
+		}
+		else {
+			print INDEX1 '<TD>'.$mirctrl.'</TD>';
+		}
+		
+		
+		
+		## SECTION RECHERCHE CpG
+
+		my $acpgc=0;
+		my @cpgdata=();
+		foreach my $c (0..$#{$cpgarray[$chrI]}) {
+			if ( ( ${${$cpgarray[$chrI]}[$c]}[3] >= ${$regions[$r]}[2]) and (${${$cpgarray[$chrI]}[$c]}[2] <= ${$regions[$r]}[3]) ) {
+				$acpgc++;
+				push @cpgdata, [ @{${$cpgarray[$chrI]}[$c]} ];
+			}
+		}
+		
+		if ($acpgc > 0) {
+			print INDEX1 '<TD><A HREF=html_'.$time.'_'.$co.'/cpg.html#'.$anchor.' TARGET=_parent>'.$acpgc.'</TD>';
+			
+			print CPGH '<A NAME="'.$anchor.'"> </A>
+<FONT SIZE=4 COLOR=black><I>Genomic region spanning</I> <B>chr'.$curreg[0].'</B> <I>from</I> <B>'.&triplet($curreg[2]).'</B> <I>to</I> <B>'.&triplet($curreg[3]).'</B> <I>bp.</I></FONT>
+<TABLE BORDER=2 WIDTH=100% ALIGN=center>
+ <TR ALIGN=center BGCOLOR=green>
+  <B><TH WIDTH=10% ALIGN=left>CpGIsl Name</TH> <TH WIDTH=5%>Chr</TH> <TH WIDTH=10%>Start</TH> <TH WIDTH=10%>End</TH> <TH WIDTH=10%>Width</TH> <TH WIDTH=5%>CpG%</TH> <TH WIDTH=5%>GC%</TH> <TH WIDTH=5%>Obs/Exp</TH> <TH WIDTH=20%>Close genes (+/-3Kb)</TH></B>
+ </TR>';
+			
+			foreach my $cg (0..$#cpgdata) {
+				
+				if ($mode =~ /^(solo|mcr)$/) {
+					print CPGH '
+ <TR ALIGN=right BGCOLOR='.$bgcoltype{$curreg[5]}.'>';
+				}
+				else {
+					print CPGH '
+ <TR ALIGN=right>';
+				}
+				
+				my $cpgname = ${$cpgdata[$cg]}[4];
+				$cpgname =~ s/\: /\%3A\+/;
+				
+				print CPGH '
+  <TD ALIGN=left><A HREF=http://genome.ucsc.edu/cgi-bin/hgTracks?position=chr'.$curreg[0].':'.${$cpgdata[$cg]}[2].'-'.${$cpgdata[$cg]}[3].'&db=hg'.$hg.' TARGET=_new>'.${$cpgdata[$cg]}[4].'</TD> <TD ALIGN=center>'.${$regions[$r]}[0].'</TD> <TD>'.&triplet(${$cpgdata[$cg]}[2]).'</TD> <TD>'.&triplet(${$cpgdata[$cg]}[3]).'</TD> <TD>'.&triplet(${$cpgdata[$cg]}[5]).'</TD> <TD>'.${$cpgdata[$cg]}[8].'%</TD> <TD>'.${$cpgdata[$cg]}[9].'%</TD> <TD>'.${$cpgdata[$cg]}[10].'</TD> <TD ALIGN=center>';
+				
+				my $cgrchk=0;
+				my @gcr = @{$genarray[$curreg[0]-1]};
+				foreach my $w (0..$#gcr) {
+					if ( (${$gcr[$w]}[2] >= ${$cpgdata[$cg]}[2] - 3000) and (${$gcr[$w]}[3] <= ${$cpgdata[$cg]}[3] + 3000) ) {
+						$cgrchk++;
+						if ( (${$gcr[$w]}[2] <= ${$cpgdata[$cg]}[3]) and (${$gcr[$w]}[3] >= ${$cpgdata[$cg]}[2]) ) {
+							print CPGH '<B>'.${$gcr[$w]}[0].' </B>';
+						}
+						else {
+							print CPGH ${$gcr[$w]}[0].' ';
+						}
+					}
+				}
+				if ($cgrchk == 0) {
+					print CPGH '-';
+				}
+				print CPGH '</TD>
+ </TR>';
+			}
+			print CPGH '
+</TABLE>
+<BR><BR>';
+		}
+		else {
+			print INDEX1 '<TD>'.$cpgctrl.'</TD>';
+		}
+		
+		print INDEX1 '
+ </TR>';
+ 
+	}
+	print INDEX1 '
+</TABLE>';
+	
+	print INDEX1 '
+<BR><BR>
+<FONT SIZE=4><B><I><U>Legend :</U></I></B></FONT><BR>
+<TABLE NOBORDER>
+ <TR> <TD ALIGN=left WIDTH=20%><B>Chr</B></TD> <TD ALIGN=right>Chromosome</TD> </TR>
+ <TR> <TD ALIGN=left WIDTH=20%><B>Start</B></TD> <TD ALIGN=right>Chromosomal start position</TD> </TR>
+ <TR> <TD ALIGN=left WIDTH=20%><B>End</B></TD> <TD ALIGN=right>Chromosomal end position</TD> </TR>
+ <TR> <TD ALIGN=left WIDTH=20%><B>Width</B></TD> <TD ALIGN=right>Width of the region</TD> </TR>
+ <TR> <TD ALIGN=left WIDTH=20%><B>Band1</B></TD> <TD ALIGN=right>Starting cyto band</TD> </TR>
+ <TR> <TD ALIGN=left WIDTH=20%><B>Band2</B></TD> <TD ALIGN=right>Ending cyto band</TD> </TR>';
+	
+	if ($mode eq 'cc') {
+		print INDEX1 '
+ <TR> <TD ALIGN=left WIDTH=20%><B>Probes</B></TD> <TD ALIGN=right>Number of probes within the region</TD> </TR>
+ <TR> <TD ALIGN=left WIDTH=20%><B>Status</B></TD> <TD ALIGN=right>Type of aberration for the considered population (G:Gain, L:Loss, N:Normal, A:Ambiguous)</TD> </TR>
+ <TR> <TD ALIGN=left WIDTH=20%><B>Gain</B></TD> <TD ALIGN=right>GAINED fraction of samples for the considered population</TD> </TR>
+ <TR> <TD ALIGN=left WIDTH=20%><B>Loss</B></TD> <TD ALIGN=right>LOST fraction of samples for the considered population</TD> </TR>
+ <TR> <TD ALIGN=left WIDTH=20%><B>Score</B></TD> <TD ALIGN=right>Statistical score within the region</TD> </TR>
+ <TR> <TD ALIGN=left WIDTH=20%><B>Raw P</B></TD> <TD ALIGN=right>Raw P-value within the region</TD> </TR>
+ <TR> <TD ALIGN=left WIDTH=20%><B>Adj P</B></TD> <TD ALIGN=right>BH FDR-adjusted P-value within the region</TD> </TR>';
+	}
+	
+	elsif ($mode eq 'mcr') {
+		print INDEX1 '
+ <TR> <TD ALIGN=left WIDTH=20%><B>Probes</B></TD> <TD ALIGN=right>Number of probes within the region</TD> </TR>
+ <TR> <TD ALIGN=left WIDTH=20%><B>MCR type</B></TD> <TD ALIGN=right>Type of aberration (G:Gain, L:Loss)</TD> </TR>
+ <TR> <TD ALIGN=left WIDTH=20%><B>Avg freq</B></TD> <TD ALIGN=right>Average fraction of samples with the aberration within the region</TD> </TR>
+ <TR> <TD ALIGN=left WIDTH=20%><B>Pval</B></TD> <TD ALIGN=right>Best FDR-adjusted P-value of the region</TD> </TR>';
+	}
+	
+	elsif ($mode eq 'solo') {
+		print INDEX1 '
+ <TR> <TD ALIGN=left WIDTH=20%><B>Probes</B></TD> <TD ALIGN=right>Number of probes within the region</TD> </TR>
+ <TR> <TD ALIGN=left WIDTH=20%><B>Status</B></TD> <TD ALIGN=right>Type of aberration (G:Gain, L:Loss)</TD> </TR>
+ <TR> <TD ALIGN=left WIDTH=20%><B>Log2 ratio</B></TD> <TD ALIGN=right>Log2(ratio)</TD> </TR>
+ <TR> <TD ALIGN=left WIDTH=20%><B>Ratio</B></TD> <TD ALIGN=right>Ratio</TD> </TR>';
+	}
+	
+	print INDEX1 '
+ <TR> <TD ALIGN=left WIDTH=20%><B>Genes</B></TD> <TD ALIGN=right>Number of genes contained in the region</TD> </TR>
+ <TR> <TD ALIGN=left WIDTH=20%><B>CNV</B></TD> <TD ALIGN=right>Number of polymorphisms (Copy Number Variations) in the region</TD> </TR>
+ <TR> <TD ALIGN=left WIDTH=20%><B>miRNA</B></TD> <TD ALIGN=right>Number of miRNA contained in the region</TD> </TR>
+</TABLE>
+</BODY>
+</HTML>';
+	close INDEX1;
+	
+	print GENH '
+</BODY>
+</HTML>';
+	close GENH;
+	
+	print CNVH '
+</BODY>
+</HTML>';
+	close CNVH;
+	
+	print MIRH '
+</BODY>
+</HTML>';
+	close MIRH;
+	
+	print CPGH '
+</BODY>
+</HTML>';
+	close CPGH;
+	
+	
+	
+
+	#################################################
+	## Feuille HTML mol�cules et cibles aberrantes ##
+	#################################################
+
+	if ($chem eq 'Y') {
+		
+		if ($mode ne 'solo') {
+			print "\nERROR : can't generate chemicals pages for an other mode than SOLO !\n";
+			next;
+		}
+		
+		open MOLG, ">".$infile.".chem.html" or die $!;
+		print MOLG '
+<HTML>
+<HEAD>
+ <TITLE>'.$infile.' ('.$time.') - List of chemicals and their aberrant target genes.</TITLE>
+</HEAD>
+<BODY BGCOLOR=#EEEEFF>
+<TABLE BORDER=2 WIDTH=99% ALIGN=left>
+ <TR ALIGN=center BGCOLOR=orange>
+  <B><TH WIDTH=10%>Chemical</TH> <TH WIDTH=6%>Target Genes</TH> <TH WIDTH=39%>Target Genes List</TH> <TH WIDTH=6%>Found Targets</TH> <TH WIDTH=39%>Found Targets List</TH></B>
+ </TR>';
+
+		foreach my $l1 (0..$#{$ms}) {
+			print MOLG '
+ <TR>
+  <TD COLSPAN=5 ALIGN=left BGCOLOR=green><B>'.$ms->[$l1]->[0].'</B></TD>
+ </TR>';
+  
+			foreach my $l2 (1..$#{$ms->[$l1]}) {
+				print MOLG '
+ <TR>
+  <TD COLSPAN=5 ALIGN=left BGCOLOR=red><B>'.$ms->[$l1]->[$l2]->[0].'</B></TD>
+ </TR>';
+  
+				foreach my $l3 (1..$#{$ms->[$l1]->[$l2]}) {
+					print MOLG '
+ <TR>
+  <TD COLSPAN=5 ALIGN=left BGCOLOR=#7FFFD4><B>'.$ms->[$l1]->[$l2]->[$l3]->[0].'</B></TD>
+ </TR>';
+					foreach my $l4 (1..$#{$ms->[$l1]->[$l2]->[$l3]}) {
+						print MOLG '
+ <TR>
+  <TD WIDTH=10% ALIGN=center><B>'.$ms->[$l1]->[$l2]->[$l3]->[$l4]->[0].'</B></TD> <TD WIDTH=6% ALIGN=center>';
+						
+						my @accgl=();
+						
+# 						@accgl = @{$ms->[$l1]->[$l2]->[$l3]->[$l4]->[1]};
+# 						
+# 						if ( (scalar(@accgl) == 0) and (exists $toxchemhash{lc($ms->[$l1]->[$l2]->[$l3]->[$l4]->[0])}) ) {
+# 							@accgl = @{$toxchemhash{lc($ms->[$l1]->[$l2]->[$l3]->[$l4]->[0])}};
+# 						}
+						
+						@accgl = @{$ms->[$l1]->[$l2]->[$l3]->[$l4]->[1]};
+						
+						if (exists $toxchemhash{lc($ms->[$l1]->[$l2]->[$l3]->[$l4]->[0])}) {
+							push @accgl,  @{$toxchemhash{lc($ms->[$l1]->[$l2]->[$l3]->[$l4]->[0])}};
+						}
+						
+						## Elimination des redondances de genes entre les deux sources (CTD et DrugBank)
+						my %gfilt=();
+						foreach my $g (@accgl) {
+							$gfilt{$g} = 1;
+						}
+						@accgl = sort {$a cmp $b} keys(%gfilt);
+						
+						
+						print MOLG scalar(@accgl).'</TD> <TD WIDTH=26%>';
+						if (scalar(@accgl) > 0) {
+							print MOLG join(' ', @accgl).'</TD> <TD WIDTH=6% ALIGN=center>';
+							my $tgxc=0;
+							foreach my $tgx (@accgl) {
+								if (exists $abgene{$tgx}) {
+									$tgxc++;
+								}
+							}
+							if ($tgxc > 0) {
+								print MOLG '<B>'.$tgxc.'</B><BR>('.sprintf("%.1f", ($tgxc/scalar(@accgl)*100)).'%)</TD> <TD WIDTH=39%>';
+							}
+							else {
+								print MOLG '-</TD> <TD WIDTH=39% ALIGN=center>-';
+							}
+							foreach my $tg (0..$#accgl) {
+								if (exists $abgene{$accgl[$tg]}) {
+									print MOLG '<FONT COLOR=';
+									
+									my @ABGL = @{$abgene{$accgl[$tg]}};
+									my ($posc, $negc) = (0, 0);
+									
+									foreach my $ab (@ABGL) {
+										if ($ab >= 0) {
+											$posc++;
+										}
+										else {
+											$negc++;
+										}
+									}
+									if ($posc == scalar(@ABGL)) {
+										print MOLG 'red>';
+									}
+									elsif ($negc == scalar(@ABGL)) {
+										print MOLG 'green>';
+									}
+									else {
+										print MOLG 'black>';
+									}
+									print MOLG $accgl[$tg].'</FONT> (';
+									
+									foreach my $tgl (0..$#{$abgene{$accgl[$tg]}}) {
+										print MOLG '<FONT COLOR=';
+										if (${$abgene{$accgl[$tg]}}[$tgl] >= 0) {
+											print MOLG 'red>';
+										}
+										else {
+											print MOLG 'green>';
+										}
+										if ( (${$abgene{$accgl[$tg]}}[$tgl] >= 1.5) or (${$abgene{$accgl[$tg]}}[$tgl] <= -2) ) {
+											print MOLG '<B><U>'.sprintf("%.2f", ${$abgene{$accgl[$tg]}}[$tgl]).'</U></B></FONT>';
+										}
+										elsif ( (${$abgene{$accgl[$tg]}}[$tgl] >= 0.75) or (${$abgene{$accgl[$tg]}}[$tgl] <= -1) ) {
+											print MOLG '<B>'.sprintf("%.2f", ${$abgene{$accgl[$tg]}}[$tgl]).'</B></FONT>';
+										}
+										else {
+											print MOLG sprintf("%.2f", ${$abgene{$accgl[$tg]}}[$tgl]).'</FONT>';
+										}
+										if ($tgl != $#{$abgene{$accgl[$tg]}}) {
+											print MOLG ', ';
+										}
+									}
+									print MOLG ') ';
+								}
+# 								else {
+# 									print MOLG $accgl[$tg].' ';
+# 								}
+							}
+						}
+						else {
+							print MOLG '-';
+						}
+						
+						print MOLG '</TD>
+ </TR>';
+					}
+				}
+			}
+		}
+					print MOLG '
+</TABLE>
+</BODY>
+</HTML>
+';
+		close MOLG;
+	}
+
+ 
+ 
+ 
+ 
+ 
+	
+
+	## Gestion des pathways parmi les aberrations, seulement en mode SOLO;
+	if ($chem eq 'Y') {
+		if ($mode ne 'solo') {
+			print "\nERROR : can't generate chemicals pages for an other mode than SOLO !\n";
+			next;
+		}
+		my @UNPATH=();
+		foreach my $k (keys(%untoxpathash)) {
+			push @UNPATH, [ $k, scalar(@{$untoxpathash{$k}}) ];
+		}
+		@UNPATH = sort { ${$b}[1] <=> ${$a}[1] || ${$a}[0] <=> ${$b}[0] } @UNPATH;
+		
+		open UPHTM, ">".$infile.".pathrank.html" or die $!;
+		print UPHTM '
+<HTML>
+<HEAD>
+ <TITLE>'.$infile.' ('.$time.') - Ranked pathways found for aberrant genes.</TITLE>
+</HEAD>
+<BODY BGCOLOR=#EEEEFF>
+<TABLE BORDER=2 WIDTH=99% ALIGN=left>
+ <TR ALIGN=center BGCOLOR=orange>
+  <B><TH WIDTH=3%>#</TH> <TH WIDTH=35%>Pathway</TH> <TH WIDTH=5%>Found genes</TH> <TH WIDTH=57%>Genes & log2(ratio)</TH></B>
+ </TR>
+ ';
+
+		foreach my $x (0..$#UNPATH) {
+			
+			print UPHTM '
+ <TR>
+  <TD WIDTH=3% ALIGN=center>'.($x+1).'</TD> <TD WIDTH=35%>'.${$UNPATH[$x]}[0].'</TD> <TD WIDTH=5% ALIGN=center>'.${$UNPATH[$x]}[1].'</TD> <TD WIDTH=57%>';
+			
+			my @Utemp = @{$untoxpathash{${$UNPATH[$x]}[0]}};
+			
+			@Utemp = sort { ${$b}[1] <=> ${$a}[1] || ${$a}[0] <=> ${$b}[0] } @Utemp;
+			
+			foreach my $y (0..$#Utemp) {
+				
+				if (${$Utemp[$y]}[1] > 0) {
+					print UPHTM '<FONT COLOR=red>'.${$Utemp[$y]}[0].'</FONT> (<FONT COLOR=red>';
+					if (${$Utemp[$y]}[1] >= 1.5) {
+						print UPHTM '<B>'.sprintf("%.2f", ${$Utemp[$y]}[1]).'</B></FONT>)';
+					}
+					else {
+						print UPHTM sprintf("%.2f", ${$Utemp[$y]}[1]).'</FONT>)';
+					}
+				}
+				elsif (${$Utemp[$y]}[1] < 0) {
+					print UPHTM '<FONT COLOR=green>'.${$Utemp[$y]}[0].'</FONT> (<FONT COLOR=green>';
+					if (${$Utemp[$y]}[1] <= -2) {
+						print UPHTM '<B>'.sprintf("%.2f", ${$Utemp[$y]}[1]).'</B></FONT>)';
+					}
+					else {
+						print UPHTM sprintf("%.2f", ${$Utemp[$y]}[1]).'</FONT>)';
+					}
+				}
+				else {
+					print UPHTM '<B>'.${$Utemp[$y]}[0].'</B>('.sprintf("%.2f", ${$Utemp[$y]}[1]).')';
+				}
+				
+				if ($y != $#Utemp) {
+					print UPHTM ' ';
+				}
+			}
+			print UPHTM '</TD>
+ </TR>';
+		}
+		
+		print UPHTM '
+ </TABLE>
+</BODY>
+</HTML>
+';
+		close UPHTM;
+		
+		
+		
+		
+		
+		## On recommence avec la version scor�e en fonction de la couverture de la voie;
+		
+		my @UNPATH2=();
+		foreach my $k (keys(%untoxpathash)) {
+			my $gennb = scalar(@{$untoxpathash{$k}});
+			if ($gennb >= 5) {
+				push @UNPATH2, [ $k, $gennb, $FULLutphash{$k}, ($gennb/$FULLutphash{$k}) ];
+			}
+		}
+		@UNPATH2 = sort { ${$b}[3] <=> ${$a}[3] } @UNPATH2;
+		
+		open UPHTM2, ">".$infile.".pathrank2.html" or die $!;
+		print UPHTM2 '
+<HTML>
+<HEAD>
+ <TITLE>'.$infile.' ('.$time.') - Ranked pathways found for aberrant genes.</TITLE>
+</HEAD>
+<BODY BGCOLOR=#EEEEFF>
+<TABLE BORDER=2 WIDTH=99% ALIGN=left>
+ <TR ALIGN=center BGCOLOR=orange>
+  <B><TH WIDTH=3%>#</TH> <TH WIDTH=30%>Pathway Name</TH> <TH WIDTH=4%>PW Coverage</TH> <TH WIDTH=4%>Found Genes</TH> <TH WIDTH=4%>Full PW Genes</TH> <TH WIDTH=55%>Genes & log2(ratio)</TH></B>
+ </TR>
+ ';
+
+		foreach my $x (0..$#UNPATH2) {
+			
+			print UPHTM2 '
+ <TR>
+  <TD WIDTH=3% ALIGN=center>'.($x+1).'</TD> <TD WIDTH=30%>'.${$UNPATH2[$x]}[0].'</TD> <TD WIDTH=4% ALIGN=center>'.sprintf("%.2f",${$UNPATH2[$x]}[3]*100).'%</TD> <TD WIDTH=4% ALIGN=center>'.${$UNPATH2[$x]}[1].'</TD> <TD WIDTH=4% ALIGN=center>'.${$UNPATH2[$x]}[2].'</TD> <TD WIDTH=55%>';
+			
+			my @Utemp = @{$untoxpathash{${$UNPATH2[$x]}[0]}};
+			
+			@Utemp = sort { ${$b}[1] <=> ${$a}[1] || ${$a}[0] <=> ${$b}[0] } @Utemp;
+			
+			foreach my $y (0..$#Utemp) {
+				
+				if (${$Utemp[$y]}[1] > 0) {
+					print UPHTM2 '<FONT COLOR=red>'.${$Utemp[$y]}[0].'</FONT> (<FONT COLOR=red>';
+					if (${$Utemp[$y]}[1] >= 1.5) {
+						print UPHTM2 '<B>'.sprintf("%.2f", ${$Utemp[$y]}[1]).'</B></FONT>)';
+					}
+					else {
+						print UPHTM2 sprintf("%.2f", ${$Utemp[$y]}[1]).'</FONT>)';
+					}
+				}
+				elsif (${$Utemp[$y]}[1] < 0) {
+					print UPHTM2 '<FONT COLOR=green>'.${$Utemp[$y]}[0].'</FONT> (<FONT COLOR=green>';
+					if (${$Utemp[$y]}[0] <= -2) {
+						print UPHTM2 '<B>'.sprintf("%.2f", ${$Utemp[$y]}[1]).'</B></FONT>)';
+					}
+					else {
+						print UPHTM2 sprintf("%.2f", ${$Utemp[$y]}[1]).'</FONT>)';
+					}
+				}
+				else {
+					print UPHTM2 '<B>'.${$Utemp[$y]}[0].'</B>('.sprintf("%.2f", ${$Utemp[$y]}[1]).')';
+				}
+				
+				if ($y != $#Utemp) {
+					print UPHTM2 ' ';
+				}
+			}
+			print UPHTM2 '</TD>
+ </TR>';
+		}
+		
+		print UPHTM2 '
+ </TABLE>
+<BR><BR><B>Warning : Pathways for which less than <FONT COLOR=red>5</FONT> found genes among aberrant genomic regions were discarded.</B>
+</BODY>
+</HTML>
+';
+		close UPHTM2;
+	}
+}
+
+
+
+
+
+
+
+sub triplet {
+	
+	my $n = shift;
+	my @temp = reverse split '', $n;
+	
+	my $r = '';
+			
+	foreach my $x (0..$#temp) {
+		
+		$r .= $temp[$x];
+		
+		if  ( ( $x % 3 == 2 ) and ($x != $#temp) ) {
+			$r .= ',';
+		}
+	}
+	
+	my @temp2 = reverse split '', $r;
+	
+	my $r2 = '';
+	foreach (@temp2) {
+		$r2 .= $_;
+	}
+	return($r2);
+}
+
+sub glntype {
+	my $tl2r = shift;
+	my $gls = 'N';
+	if ($tl2r < 0) {
+		$gls = 'L';
+	}
+	elsif ($tl2r > 0) {
+		$gls = 'G';
+	}
+	return $gls;
+}
+
+sub widthconv {
+	my $rw = shift;
+	if ($rw < 1000) {
+		return($rw.'b');
+	}
+	elsif ($rw <1000000) {
+		return(sprintf("%.2f", ($rw/1000)).'Kb');
+	}
+	else {
+		return(sprintf("%.2f", ($rw/1000000)).'Mb');
+	}
+}

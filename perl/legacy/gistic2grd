@@ -1,0 +1,181 @@
+#!/usr/bin/perl
+use strict;
+
+my $version = '0.2b 20140911';
+
+## VERSION NOTES
+##
+## v0.2b 20140911
+##	. Added multithreaded launch of grd using -n option.
+##	. Changed option names to be more POSIX-compliant.
+##
+## v0.2 20111221
+##	. Corrected a bug which made each MCR appear twice in the output.
+##	. Added sorting of MCRs by their genomic location.
+##
+## v0.1 20111220
+##	. First test version.
+
+
+## CHROM to CHR converter
+my %chrom2chr = (	'hs' =>	{ 'chr1' => 1, 'chr2' => 2, 'chr3' => 3, 'chr4' => 4, 'chr5' => 5, 'chr6' => 6, 'chr7' => 7, 'chr8' => 8, 'chr9' => 9, 'chr10' => 10, 'chr11' => 11, 'chr12' => 12, 'chr13' => 13, 'chr14' => 14, 'chr15' => 15, 'chr16' => 16, 'chr17' => 17, 'chr18' => 18, 'chr19' => 19, 'chr20' => 20, 'chr21' => 21, 'chr22' => 22, 'chrX' => 23, 'chrY' => 24 },
+			'mm' =>	{ 'chr1' => 1, 'chr2' => 2, 'chr3' => 3, 'chr4' => 4, 'chr5' => 5, 'chr6' => 6, 'chr7' => 7, 'chr8' => 8, 'chr9' => 9, 'chr10' => 10, 'chr11' => 11, 'chr12' => 12, 'chr13' => 13, 'chr14' => 14, 'chr15' => 15, 'chr16' => 16, 'chr17' => 17, 'chr18' => 18, 'chr19' => 19, 'chrX' => 20, 'chrY' => 21 }	);
+
+my $infile = '';
+my $sp = 'hs';
+my $gb = 19;
+my $proj = '/mnt/proj/';
+my $db = '/mnt/db/';
+my $nt = 1;
+
+
+if (scalar(@ARGV) == 0) {
+	print '
+gistic2grd v'.$version.'
+ for: GISTIC2 output file to Genomic Regions Descriptor.
+
+DESCRIPTION: This script converts the "all_lesions" output table format from the GISTIC2
+ tool (Broad) to a set of tables that can be read and interpreted by the grd script,
+ which will describe the genomic content of the MCRs found by GISTIC2. Three different
+ tables are generated, corresponding to the different sets of MCR edges given by
+ GISTIC2 (\'peak\', \'wide peak\', \'region\'). This script will also run grd on
+ its three outputs, if the grd script is available in the user PATH environment
+ variable. Output tables have a *.g2 extension.
+
+USAGE:
+ gistic2grd [table] --sp [hs|mm] --gb [18|19|9] -g [float+] -l [float-] -b [float+] -n [int>0]
+
+ARGUMENTS
+	[table]	The "all_lesions" output from a GISTIC2 analysis.
+	--sp	Species. ['.$sp.']
+	--gb	Genome build. ['.$gb.']
+	--proj	Mount point to pelican:/proj. ['.$proj.']
+	--db	Mount point to pelican:/db. ['.$db.']
+	-n	Number of threads for multithreaded run. ['.$nt.']
+	
+NOTE1 :	Please note that the \'grd\' script can only be called if its path is
+	stored in the PATH variable environment...
+
+NOTE2 :	Options --sp, --gb, --proj, and --db are just passed to the grd script.
+
+';
+exit;
+}
+
+## Gestion des parametres;
+else {
+	$infile = $ARGV[0];
+	chomp $infile;
+	foreach my $i (1..$#ARGV) {
+		chomp $ARGV[$i];
+		if ($ARGV[$i] =~ /^--sp$/)	{ $sp = $ARGV[$i+1]; }
+		elsif ($ARGV[$i] =~ /^--gb$/)	{ $gb = $ARGV[$i+1]; }
+		elsif ($ARGV[$i] =~ /^--proj$/)	{ $proj = $ARGV[$i+1]; }
+		elsif ($ARGV[$i] =~ /^--db$/)	{ $db = $ARGV[$i+1]; }
+		elsif ($ARGV[$i] =~ /^-n$/)	{ $nt = $ARGV[$i+1]; }
+	}
+}
+my $ofroot = $infile;
+$ofroot =~ s/\.txt$//i;
+
+
+## CHECK on species and genome build support
+my %gvcheck = ('hg18' => 18, 'hg19' => 19, 'mm9' => 9);
+my %spconv = ('hs' => 'hg', 'mm' => 'mm');
+my $gv = $spconv{lc($sp)}.$gb;
+if (!exists $gvcheck{$gv}) {
+	die "\nERROR : Unknown species or genome build !\n";
+}
+else { print "Working on ".$gv."\n"; }
+
+
+
+##########
+## CORE ##
+##########
+
+
+my @biggy=();
+open INF, $infile or die $!;
+foreach (<INF>) {
+	$_ =~ s/\n//;
+	$_ =~ s/\r//;
+	$_ =~ s/\ //g;
+	if ($_ !~ /^Unique/) {
+		my @temp = split /\t/, $_;
+		push @biggy, [ @temp ];
+	}
+}
+close INF;
+
+## Filtering out the duped lines
+@biggy = @biggy[0..((($#biggy+1)/2)-1)];
+my @cbig = ();
+
+## Working by output file type
+my @otype = ('wide', 'peak', 'region');
+my @ofiles = ();
+foreach my $o (0..$#otype) {
+	my @former_coord = ('chr1:1-1', 'N', 1);
+	## Converting
+	foreach my $b (0..$#biggy) {
+		@{$cbig[$b]} = @{$biggy[$b]};
+		## Getting genomic status
+		my $gstat = '';
+		if ($cbig[$b][0] =~ /amplification/i) { $gstat = 'G'; }
+		elsif ($cbig[$b][0] =~ /deletion/i) { $gstat = 'L'; }
+		## Getting frequency
+		my $abcount=0;
+		foreach my $bc (9..$#{$cbig[$b]}) {
+			if ($cbig[$b][$bc] > 0) {
+				$abcount++;
+			}
+		}
+		my $abfreq = $abcount / ($#{$cbig[$b]} - 9 + 1);
+		@{$cbig[$b]} = ( &loc_extract($cbig[$b][$o+2]), $gstat, $abfreq, @{$cbig[$b]} );
+	}
+	## Sorting
+	@cbig = sort { ${$a}[0] <=> ${$b}[0] || ${$a}[1] <=> ${$b}[1] || ${$a}[2] <=> ${$b}[2] } @cbig;
+	## Dumping
+	my $of = $ofroot.'_'.$otype[$o].'.g2';
+	push @ofiles, $of;
+	open XOUT, ">".$of or die $!;
+	print XOUT join("\t", 'Loc', 'Probes', 'Status', 'Freq', 'Q-value')."\n";
+	foreach my $b (0..$#cbig) {
+		print XOUT join("\t", @{$cbig[$b]}[3..6,12])."\n";
+	}
+	close XOUT;
+}
+
+if (($nt > 1) and (scalar(@ofiles) > 1)) {
+	use Parallel::ForkManager;
+	my $pm = new Parallel::ForkManager($nt);
+	foreach my $k (@ofiles) {
+		my $g2cmd = 'grd '.$k.' --sp '.$sp.' --gb '.$gb.' --proj '.$proj.' --db '.$db.' -m g2';
+		$pm->start and next;
+		`$g2cmd`;
+		$pm->finish;
+	}
+	$pm->wait_all_children;
+}
+else {
+	my $g2cmd = 'grd \\*.g2 --sp '.$sp.' --gb '.$gb.' --proj '.$proj.' --db '.$db.' -m g2';
+	print "CMD : ".$g2cmd."\n";
+	`$g2cmd`;
+}
+
+
+
+
+## FUNCS
+sub loc_extract {
+	my $w = shift;
+	my ($cloc, $cpstartend) = split /\(probes/, $w;
+	my ($cpstart, $cpend) = split /\:/, $cpstartend;
+	$cpend =~ s/\(//;
+	my $cnprob = $cpend - $cpstart + 1;
+	my ($cchr, $ccstartend) = split /\:/, $cloc;
+	my $cchrN = $chrom2chr{$sp}{$cchr};
+	my ($cstart, $cend) = split /\-/, $ccstartend;
+	return($cchrN, $cstart, $cend, $cloc, $cnprob);
+}
